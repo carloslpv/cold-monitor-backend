@@ -13,6 +13,9 @@ registered for its equipment. Readings outside that range are flagged, every rea
 when an equipment leaves its range, when its sensor stops sending readings, and again when either situation is over.
 The API is protected: people log in with a user name and password, and sensors send a device API key.
 
+The architecture diagram, screenshots and an overview of the whole system are in
+[cold-monitor-infra](https://github.com/carloslpv/cold-monitor-infra).
+
 ### Stack
 
 - Java 25
@@ -70,6 +73,8 @@ To run the whole system (database, backend, dashboard) around the clock, use the
 | `SERVER_PORT` | `8080` | HTTP port |
 | `ADMIN_USERNAME` | `admin` | User name of the administrator who logs in to the dashboard |
 | `ADMIN_PASSWORD` | (required) | Administrator password, at least 8 characters. The app does not start without it |
+| `VIEWER_USERNAME` | `viewer` | User name of the optional read-only account |
+| `VIEWER_PASSWORD` | (empty) | Its password, at least 8 characters. The account exists only while this is set |
 | `DEVICE_API_KEY` | (empty) | Key sensors send in `X-API-Key`, at least 16 characters (e.g. `openssl rand -hex 32`). Sensors cannot send readings while it is empty |
 | `SESSION_TIMEOUT` | `12h` | How long a login lasts without requests (an open dashboard keeps it alive) |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173` | Comma-separated browser origins allowed to call `/api/**` with the session cookie (the dashboard dev server by default) |
@@ -93,6 +98,8 @@ checks.
   a session and sets an HTTP-only cookie, which also authorizes the live stream. `GET /api/v1/auth/me` returns the
   logged-in user (or 401) and `POST /api/v1/auth/logout` ends the session. Sessions are stored in PostgreSQL (Spring
   Session JDBC), so restarting the backend does not log anyone out.
+- **Read-only account**: with `VIEWER_PASSWORD` set, `VIEWER_USERNAME` logs in the same way and may call every `GET`
+  endpoint, live stream included, but nothing that changes data (403). The public demo hands this login to visitors.
 - **CSRF**: requests that change data with the session cookie must echo the value of the `XSRF-TOKEN` cookie in the
   `X-XSRF-TOKEN` header. The dashboard does this on its own.
 - **Sensors**: send `X-API-Key: <DEVICE_API_KEY>`. A device may list and fetch equipment, register equipment and post
@@ -288,6 +295,38 @@ Retorno: 17/10/2026 02:19:07
 The Telegram Bot API is free. Tests and `spring-boot:test-run` never send real alerts: they blank both settings in
 `src/test/resources/config/application.yaml`, and the alert tests use a fake Telegram server.
 
+### Technical decisions
+
+- **Server-Sent Events for the live stream.** Updates only flow from the server to the dashboard, and every change
+  goes through REST, so a bidirectional WebSocket would add a protocol without adding anything. SSE is plain HTTP: the
+  session cookie authorizes it (`EventSource` cannot send custom headers), proxies pass it with buffering off, and the
+  browser reconnects on its own. `ReadingStream` sends after the transaction commits (`@TransactionalEventListener`),
+  from a single virtual thread, so a slow client never delays ingestion and every client sees events in commit order.
+  Streams are closed as soon as shutdown starts, so graceful shutdown does not wait for them.
+- **Alerts per excursion, with hysteresis.** `ExcursionTracker` opens an excursion on the first out-of-range reading
+  and closes it after `ALERT_RECOVERY_READINGS` consecutive in-range readings, so one incident produces two messages
+  instead of one per reading, and a value hovering at the limit does not flap. It runs inside the reading's transaction,
+  so the reading and the excursion state commit or roll back together.
+- **A row lock per equipment.** Two readings of the same equipment arriving at once could both open an excursion.
+  Both the tracker and the offline watchdog take a `PESSIMISTIC_WRITE` lock on the equipment row, which serializes them
+  per equipment without a global lock.
+- **Late readings are stored but do not change state.** A sensor flushing its buffer after a network outage sends old
+  readings; they go into the history but cannot open or close an excursion that newer readings already decided.
+- **Offline detection by arrival time.** `SensorWatchdog` compares `received_at` (server clock), not the sensor's
+  `recorded_at`, so a sensor with a wrong clock is still judged correctly, and it counts silence from startup at the
+  earliest, so restarting the backend does not raise an alert for every sensor.
+- **History that explains itself.** Each reading stores the thresholds it was checked against, so editing an
+  equipment's range never changes the status of past readings. A partial index on out-of-range readings keeps that
+  query fast as the table grows.
+- **Sessions in PostgreSQL, API key for devices.** A form login with an HTTP-only cookie keeps credentials out of
+  JavaScript, Spring Session JDBC keeps logins through restarts, and `csrf.spa()` protects writes. Sensors have no
+  browser and no cookie, so they use `X-API-Key`, compared in constant time, with no session and no CSRF check.
+- **Telegram off the request path.** `AlertNotifier` sends after the commit on a single background thread, in order,
+  retrying network errors and honouring `retry_after` on HTTP 429, and gives up on 4xx errors that retrying cannot
+  fix. The token is redacted from logged errors.
+- **Schema owned by Flyway, tests on real PostgreSQL.** Hibernate only validates the schema (`ddl-auto: validate`) and
+  integration tests use Testcontainers, so partial indexes, `TIMESTAMPTZ` and locks behave as in production.
+
 ### Tests
 
 ```bash
@@ -320,6 +359,9 @@ e máximo cadastrados para o equipamento. Leituras fora da faixa são sinalizada
 Telegram quando um equipamento sai da faixa, quando o sensor dele para de enviar leituras, e de novo quando cada
 situação termina. A API é protegida: pessoas entram com usuário e senha, e os sensores enviam uma chave de API de
 dispositivo.
+
+O diagrama de arquitetura, os screenshots e a visão geral do sistema inteiro estão no
+[cold-monitor-infra](https://github.com/carloslpv/cold-monitor-infra).
 
 ### Tecnologias
 
@@ -378,6 +420,8 @@ Para rodar o sistema inteiro (banco, backend e dashboard) 24 horas por dia, use 
 | `SERVER_PORT` | `8080` | Porta HTTP |
 | `ADMIN_USERNAME` | `admin` | Usuário do administrador que entra no dashboard |
 | `ADMIN_PASSWORD` | (obrigatória) | Senha do administrador, com pelo menos 8 caracteres. A aplicação não sobe sem ela |
+| `VIEWER_USERNAME` | `viewer` | Usuário da conta opcional só de leitura |
+| `VIEWER_PASSWORD` | (vazio) | A senha dela, com pelo menos 8 caracteres. A conta só existe enquanto esta variável estiver definida |
 | `DEVICE_API_KEY` | (vazio) | Chave que os sensores enviam em `X-API-Key`, com pelo menos 16 caracteres (por exemplo, `openssl rand -hex 32`). Enquanto estiver vazia, os sensores não conseguem enviar leituras |
 | `SESSION_TIMEOUT` | `12h` | Quanto tempo um login dura sem requisições (um dashboard aberto mantém a sessão viva) |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173` | Origens de navegador, separadas por vírgula, que podem chamar `/api/**` com o cookie de sessão (por padrão, o servidor de desenvolvimento do dashboard) |
@@ -402,6 +446,9 @@ checks.
   grava um cookie HTTP-only, que também autoriza o fluxo ao vivo. `GET /api/v1/auth/me` devolve o usuário logado (ou
   401) e `POST /api/v1/auth/logout` encerra a sessão. As sessões ficam no PostgreSQL (Spring Session JDBC), então
   reiniciar o backend não desloga ninguém.
+- **Conta só de leitura**: com `VIEWER_PASSWORD` definida, o `VIEWER_USERNAME` entra do mesmo jeito e pode chamar todos
+  os endpoints `GET`, inclusive o fluxo ao vivo, mas nada que altere dados (403). A demo pública entrega esse login aos
+  visitantes.
 - **CSRF**: requisições que alteram dados com o cookie de sessão precisam repetir o valor do cookie `XSRF-TOKEN` no
   cabeçalho `X-XSRF-TOKEN`. O dashboard faz isso sozinho.
 - **Sensores**: enviam `X-API-Key: <DEVICE_API_KEY>`. Um dispositivo pode listar e buscar equipamentos, cadastrar
@@ -579,6 +626,42 @@ Retorno: 17/10/2026 02:19:07
 A Bot API do Telegram é gratuita. Os testes e o `spring-boot:test-run` nunca enviam alertas de verdade: eles zeram as
 duas configurações em `src/test/resources/config/application.yaml`, e os testes de alerta usam um servidor falso do
 Telegram.
+
+### Decisões técnicas
+
+- **Server-Sent Events para o fluxo ao vivo.** As atualizações só vão do servidor para o dashboard, e toda alteração
+  passa pelo REST, então um WebSocket bidirecional acrescentaria um protocolo sem acrescentar nada. SSE é HTTP comum: o
+  cookie de sessão o autoriza (o `EventSource` não envia cabeçalhos próprios), proxies o repassam com o buffer
+  desligado e o navegador reconecta sozinho. O `ReadingStream` envia depois do commit da transação
+  (`@TransactionalEventListener`), numa única virtual thread, então um cliente lento nunca atrasa a ingestão e todos
+  recebem os eventos na ordem do commit. Os fluxos são fechados assim que o desligamento começa, para o graceful
+  shutdown não ficar esperando por eles.
+- **Alertas por excursão, com histerese.** O `ExcursionTracker` abre uma excursão na primeira leitura fora da faixa e
+  a fecha depois de `ALERT_RECOVERY_READINGS` leituras seguidas dentro da faixa, então um incidente gera duas mensagens
+  em vez de uma por leitura, e um valor oscilando no limite não fica abrindo e fechando. Ele roda dentro da transação
+  da leitura, então a leitura e o estado da excursão são confirmados ou desfeitos juntos.
+- **Um lock de linha por equipamento.** Duas leituras do mesmo equipamento chegando juntas poderiam abrir duas
+  excursões. O tracker e o vigia de sensores pegam um lock `PESSIMISTIC_WRITE` na linha do equipamento, o que as
+  serializa por equipamento sem um lock global.
+- **Leituras atrasadas são gravadas mas não mudam o estado.** Um sensor que descarrega o buffer depois de uma queda de
+  rede envia leituras antigas; elas entram no histórico, mas não abrem nem fecham uma excursão que leituras mais novas
+  já decidiram.
+- **Sensor sem leituras pelo horário de chegada.** O `SensorWatchdog` compara o `received_at` (relógio do servidor),
+  não o `recorded_at` do sensor, então um sensor com relógio errado ainda é avaliado certo, e conta o silêncio no
+  mínimo a partir da inicialização, então reiniciar o backend não dispara alerta para todos os sensores.
+- **Um histórico que se explica.** Cada leitura guarda os limites com que foi avaliada, então editar a faixa de um
+  equipamento nunca muda o status de leituras passadas. Um índice parcial nas leituras fora da faixa mantém essa
+  consulta rápida conforme a tabela cresce.
+- **Sessões no PostgreSQL, chave de API para dispositivos.** Login por formulário com cookie HTTP-only mantém as
+  credenciais longe do JavaScript, o Spring Session JDBC preserva os logins entre reinícios e o `csrf.spa()` protege as
+  escritas. Sensores não têm navegador nem cookie, então usam o `X-API-Key`, comparado em tempo constante, sem sessão
+  e sem verificação de CSRF.
+- **Telegram fora do caminho da requisição.** O `AlertNotifier` envia depois do commit numa única thread em segundo
+  plano, em ordem, tentando de novo em erros de rede e respeitando o `retry_after` do HTTP 429, e desiste em erros 4xx
+  que uma nova tentativa não resolve. O token é removido dos erros que vão para o log.
+- **Schema do Flyway, testes em PostgreSQL de verdade.** O Hibernate só valida o schema (`ddl-auto: validate`) e os
+  testes de integração usam o Testcontainers, então índices parciais, `TIMESTAMPTZ` e locks se comportam como em
+  produção.
 
 ### Testes
 
