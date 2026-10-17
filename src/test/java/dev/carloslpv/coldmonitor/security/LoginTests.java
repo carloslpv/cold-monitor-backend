@@ -1,5 +1,7 @@
 package dev.carloslpv.coldmonitor.security;
 
+import java.util.List;
+
 import com.jayway.jsonpath.JsonPath;
 import dev.carloslpv.coldmonitor.ApiSession;
 import dev.carloslpv.coldmonitor.TestcontainersConfiguration;
@@ -41,6 +43,19 @@ class LoginTests {
 		var logout = session.post("/api/v1/auth/logout", "");
 		assertThat(logout.statusCode()).isEqualTo(204);
 		assertThat(session.get("/api/v1/auth/me").statusCode()).isEqualTo(401);
+	}
+
+	@Test
+	void logsInTheViewer() throws Exception {
+		var session = ApiSession.anonymous(port);
+
+		var login = session.login(ApiSession.VIEWER_USERNAME, ApiSession.VIEWER_PASSWORD);
+
+		assertThat(login.statusCode()).isEqualTo(200);
+		assertThat(JsonPath.<String>read(login.body(), "$.username")).isEqualTo("viewer");
+		assertThat(JsonPath.<List<String>>read(login.body(), "$.roles")).containsExactly("VIEWER");
+		assertThat(session.get("/api/v1/equipment").statusCode()).isEqualTo(200);
+		assertThat(session.post("/api/v1/auth/logout", "").statusCode()).isEqualTo(204);
 	}
 
 	@Test

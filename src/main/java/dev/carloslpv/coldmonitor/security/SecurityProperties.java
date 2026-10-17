@@ -7,6 +7,8 @@ import org.springframework.util.StringUtils;
 /**
  * @param adminUsername user name of the dashboard and API administrator
  * @param adminPassword password of the administrator; required
+ * @param viewerUsername user name of an optional read-only account, e.g. for a public demo
+ * @param viewerPassword password of the read-only account; the account exists only while it is set
  * @param deviceApiKey key that sensors send in the {@code X-API-Key} header to post readings; device access is off
  * while it is empty
  */
@@ -14,6 +16,8 @@ import org.springframework.util.StringUtils;
 public record SecurityProperties(
 		@DefaultValue("admin") String adminUsername,
 		String adminPassword,
+		@DefaultValue("viewer") String viewerUsername,
+		String viewerPassword,
 		String deviceApiKey) {
 
 	static final int MIN_PASSWORD_LENGTH = 8;
@@ -28,11 +32,26 @@ public record SecurityProperties(
 			throw new IllegalArgumentException("Set ADMIN_PASSWORD (cold-monitor.security.admin-password) to at least "
 					+ MIN_PASSWORD_LENGTH + " characters");
 		}
+		viewerPassword = StringUtils.hasText(viewerPassword) ? viewerPassword : null;
+		if (viewerPassword != null) {
+			if (!StringUtils.hasText(viewerUsername) || viewerUsername.equals(adminUsername)) {
+				throw new IllegalArgumentException("VIEWER_USERNAME (cold-monitor.security.viewer-username) must not be "
+						+ "blank or equal to ADMIN_USERNAME");
+			}
+			if (viewerPassword.length() < MIN_PASSWORD_LENGTH) {
+				throw new IllegalArgumentException("VIEWER_PASSWORD (cold-monitor.security.viewer-password) must have "
+						+ "at least " + MIN_PASSWORD_LENGTH + " characters");
+			}
+		}
 		deviceApiKey = StringUtils.hasText(deviceApiKey) ? deviceApiKey.trim() : null;
 		if (deviceApiKey != null && deviceApiKey.length() < MIN_API_KEY_LENGTH) {
 			throw new IllegalArgumentException("DEVICE_API_KEY (cold-monitor.security.device-api-key) must have at least "
 					+ MIN_API_KEY_LENGTH + " characters");
 		}
+	}
+
+	boolean viewerEnabled() {
+		return viewerPassword != null;
 	}
 
 	boolean deviceAccessEnabled() {
@@ -42,8 +61,8 @@ public record SecurityProperties(
 	@Override
 	public String toString() {
 		// keeps secrets out of logs and failure analysis output
-		return "SecurityProperties[adminUsername=" + adminUsername + ", deviceAccessEnabled=" + deviceAccessEnabled()
-				+ "]";
+		return "SecurityProperties[adminUsername=" + adminUsername + ", viewerEnabled=" + viewerEnabled()
+				+ ", deviceAccessEnabled=" + deviceAccessEnabled() + "]";
 	}
 
 }

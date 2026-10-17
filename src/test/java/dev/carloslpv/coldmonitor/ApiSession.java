@@ -23,6 +23,10 @@ public final class ApiSession {
 
 	public static final String ADMIN_PASSWORD = "test-admin-password";
 
+	public static final String VIEWER_USERNAME = "viewer";
+
+	public static final String VIEWER_PASSWORD = "test-viewer-password";
+
 	public static final String DEVICE_API_KEY = "test-device-api-key-0123456789";
 
 	private static final Duration TIMEOUT = Duration.ofSeconds(10);

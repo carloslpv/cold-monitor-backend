@@ -25,6 +25,7 @@ import org.springframework.security.web.authentication.logout.HttpStatusReturnin
  * <li>The administrator logs in with user name and password ({@code POST /api/v1/auth/login}) and gets a session
  * cookie, which also authorizes the live stream. State-changing requests from the browser carry a CSRF token read from
  * the {@code XSRF-TOKEN} cookie.</li>
+ * <li>An optional viewer account logs in the same way but may only read, which suits a public demo.</li>
  * <li>Sensors send the device API key in {@code X-API-Key} and may only list and register equipment and post
  * readings.</li>
  * <li>The health endpoint stays public for container health checks.</li>
@@ -35,6 +36,8 @@ import org.springframework.security.web.authentication.logout.HttpStatusReturnin
 class SecurityConfiguration {
 
 	static final String ADMIN_ROLE = "ADMIN";
+
+	static final String VIEWER_ROLE = "VIEWER";
 
 	private static final Logger logger = LoggerFactory.getLogger(SecurityConfiguration.class);
 
@@ -49,9 +52,10 @@ class SecurityConfiguration {
 			.requestMatchers("/actuator/health", "/actuator/health/**", "/error").permitAll()
 			.requestMatchers(HttpMethod.POST, "/api/v1/auth/login").permitAll()
 			.requestMatchers(HttpMethod.GET, "/api/v1/equipment", "/api/v1/equipment/*")
-				.hasAnyRole(ADMIN_ROLE, ApiKeyAuthenticationFilter.DEVICE_ROLE)
+				.hasAnyRole(ADMIN_ROLE, VIEWER_ROLE, ApiKeyAuthenticationFilter.DEVICE_ROLE)
 			.requestMatchers(HttpMethod.POST, "/api/v1/equipment", "/api/v1/equipment/*/readings")
 				.hasAnyRole(ADMIN_ROLE, ApiKeyAuthenticationFilter.DEVICE_ROLE)
+			.requestMatchers(HttpMethod.GET, "/api/v1/**").hasAnyRole(ADMIN_ROLE, VIEWER_ROLE)
 			.anyRequest().hasRole(ADMIN_ROLE))
 			.addFilterBefore(apiKeyFilter, UsernamePasswordAuthenticationFilter.class)
 			.formLogin((form) -> form
@@ -87,7 +91,15 @@ class SecurityConfiguration {
 			.password(encoder.encode(properties.adminPassword()))
 			.roles(ADMIN_ROLE)
 			.build();
-		return new InMemoryUserDetailsManager(admin);
+		var users = new InMemoryUserDetailsManager(admin);
+		if (properties.viewerEnabled()) {
+			users.createUser(User.withUsername(properties.viewerUsername())
+				.password(encoder.encode(properties.viewerPassword()))
+				.roles(VIEWER_ROLE)
+				.build());
+			logger.info("Read-only user '{}' enabled", properties.viewerUsername());
+		}
+		return users;
 	}
 
 }

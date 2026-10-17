@@ -12,6 +12,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
@@ -80,6 +81,40 @@ class AccessControlTests {
 	}
 
 	@Test
+	void letsTheViewerReadEverything() throws Exception {
+		var body = mvc.perform(device(post("/api/v1/equipment")).contentType(MediaType.APPLICATION_JSON)
+			.content(equipmentJson("VIEWER-01"))).andReturn().getResponse().getContentAsString();
+		String id = JsonPath.read(body, "$.id");
+
+		mvc.perform(get("/api/v1/equipment").with(viewer())).andExpect(status().isOk());
+		mvc.perform(get("/api/v1/equipment/{id}", id).with(viewer())).andExpect(status().isOk());
+		mvc.perform(get("/api/v1/equipment/{id}/readings", id).with(viewer())).andExpect(status().isOk());
+		mvc.perform(get("/api/v1/readings/out-of-range").with(viewer())).andExpect(status().isOk());
+		mvc.perform(get("/api/v1/sensor-outages").with(viewer())).andExpect(status().isOk());
+		mvc.perform(get("/api/v1/auth/me").with(viewer()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.roles[0]").value("VIEWER"));
+	}
+
+	@Test
+	void keepsTheViewerFromChangingAnything() throws Exception {
+		var body = mvc.perform(device(post("/api/v1/equipment")).contentType(MediaType.APPLICATION_JSON)
+			.content(equipmentJson("VIEWER-02"))).andReturn().getResponse().getContentAsString();
+		String id = JsonPath.read(body, "$.id");
+
+		mvc.perform(post("/api/v1/equipment").with(viewer()).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+			.content(equipmentJson("VIEWER-03")))
+			.andExpect(status().isForbidden())
+			.andExpect(jsonPath("$.detail").value("Access denied"));
+		mvc.perform(put("/api/v1/equipment/{id}", id).with(viewer()).with(csrf())
+			.contentType(MediaType.APPLICATION_JSON)
+			.content(equipmentJson("VIEWER-02"))).andExpect(status().isForbidden());
+		mvc.perform(post("/api/v1/equipment/{id}/readings", id).with(viewer()).with(csrf())
+			.contentType(MediaType.APPLICATION_JSON)
+			.content("{\"temperature\": 4.2}")).andExpect(status().isForbidden());
+	}
+
+	@Test
 	void rejectsAWrongApiKey() throws Exception {
 		mvc.perform(get("/api/v1/equipment").header("X-API-Key", "not-the-device-key-at-all"))
 			.andExpect(status().isUnauthorized())
@@ -94,6 +129,10 @@ class AccessControlTests {
 		mvc.perform(post("/api/v1/equipment").with(user("admin").roles("ADMIN")).with(csrf())
 			.contentType(MediaType.APPLICATION_JSON)
 			.content(equipmentJson("CSRF-01"))).andExpect(status().isCreated());
+	}
+
+	private static RequestPostProcessor viewer() {
+		return user(ApiSession.VIEWER_USERNAME).roles("VIEWER");
 	}
 
 	private static MockHttpServletRequestBuilder device(MockHttpServletRequestBuilder request) {
