@@ -166,7 +166,9 @@ server closes each stream after 30 minutes; browsers' `EventSource` reconnects o
 REST endpoints after reconnecting.
 
 The same stream sends a `sensor-outage` event when an equipment goes offline and again when its readings resume. Its
-`data` has the shape of the `/sensor-outages` endpoint (`endedAt` is `null` in the first one).
+`data` has the shape of the `/sensor-outages` endpoint (`endedAt` is `null` in the first one). An `equipment` event,
+with the shape of the `/equipment` endpoints, goes out whenever equipment is registered or updated (thresholds,
+`active` flag), so clients can refresh their equipment list.
 
 ```bash
 curl -N http://localhost:8080/api/v1/readings/stream
@@ -421,7 +423,9 @@ entre tentativas). Leituras gravadas enquanto o cliente estava desconectado não
 recarrega o histórico pelos endpoints REST depois de reconectar.
 
 O mesmo fluxo envia um evento `sensor-outage` quando um equipamento fica offline e de novo quando as leituras voltam. O
-`data` tem o formato do endpoint `/sensor-outages` (`endedAt` vem `null` no primeiro).
+`data` tem o formato do endpoint `/sensor-outages` (`endedAt` vem `null` no primeiro). Um evento `equipment`, com o
+formato dos endpoints `/equipment`, sai sempre que um equipamento é cadastrado ou atualizado (limites, campo `active`),
+para os clientes atualizarem a lista de equipamentos.
 
 ```bash
 curl -N http://localhost:8080/api/v1/readings/stream
