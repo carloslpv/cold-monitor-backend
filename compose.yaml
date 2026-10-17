@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: cold-monitor-postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-coldmonitor}
+      POSTGRES_USER: ${DB_USER:-coldmonitor}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-coldmonitor}
+    ports:
+      - "${DB_PORT:-5433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:
