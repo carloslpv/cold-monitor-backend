@@ -1,0 +1,7 @@
+# Overrides for tests and spring-boot:test-run. Keeps them from sending real Telegram alerts with the token in .env
+# or in the environment; tests that need Telegram point it at a fake server.
+cold-monitor:
+  alerts:
+    telegram:
+      bot-token: ""
+      chat-id: ""

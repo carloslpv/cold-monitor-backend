@@ -1,6 +1,9 @@
 spring:
   application:
     name: cold-monitor-backend
+  config:
+    # local secrets such as the Telegram bot token; the file is git-ignored
+    import: optional:file:.env[.properties]
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5433}/${DB_NAME:coldmonitor}
     username: ${DB_USER:coldmonitor}
@@ -18,6 +21,12 @@ server:
 cold-monitor:
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
+  alerts:
+    recovery-readings: ${ALERT_RECOVERY_READINGS:2}
+    time-zone: ${ALERT_TIME_ZONE:America/Sao_Paulo}
+    telegram:
+      bot-token: ${TELEGRAM_BOT_TOKEN:}
+      chat-id: ${TELEGRAM_CHAT_ID:}
 
 management:
   endpoints:

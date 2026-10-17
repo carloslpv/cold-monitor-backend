@@ -18,6 +18,8 @@ public interface TemperatureReadingRepository extends JpaRepository<TemperatureR
 	@EntityGraph(attributePaths = "equipment")
 	Optional<TemperatureReading> findFirstByEquipmentIdOrderByRecordedAtDesc(UUID equipmentId);
 
+	boolean existsByEquipmentIdAndRecordedAtAfter(UUID equipmentId, Instant recordedAt);
+
 	@EntityGraph(attributePaths = "equipment")
 	Page<TemperatureReading> findByStatusNotAndRecordedAtBetweenOrderByRecordedAtDesc(ReadingStatus status,
 			Instant from, Instant to, Pageable pageable);
