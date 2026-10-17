@@ -48,13 +48,52 @@ class AlertMessages {
 		return text.toString();
 	}
 
+	String format(SensorOutageAlert alert) {
+		var text = new StringJoiner("\n");
+		var equipment = equipment(alert.equipmentName(), alert.equipmentCode(), alert.equipmentLocation());
+		if (alert.kind() == SensorOutageAlert.Kind.STARTED) {
+			text.add("⚠️ Sensor sem leituras");
+			text.add(equipment);
+			text.add("Última leitura: %s em %s".formatted(celsius(alert.lastTemperature()),
+					this.timeFormat.format(alert.lastReadingAt())));
+			text.add("Sem leituras há " + duration(Duration.between(alert.lastReadingAt(), alert.detectedAt())));
+			var excursion = alert.excursion();
+			if (excursion != null) {
+				text.add("Atenção: estava %s desde %s · %s: %s".formatted(
+						(excursion.status() == ReadingStatus.ABOVE_MAX) ? "acima do máximo" : "abaixo do mínimo",
+						this.timeFormat.format(excursion.startedAt()),
+						(excursion.status() == ReadingStatus.ABOVE_MAX) ? "máxima" : "mínima",
+						celsius(excursion.peakTemperature())));
+			}
+		}
+		else {
+			var reading = alert.reading();
+			text.add("🟢 Sensor voltou a enviar leituras");
+			text.add(equipment);
+			text.add("Leitura: %s · faixa: %s%s".formatted(celsius(reading.temperature()),
+					range(reading.minTemperature(), reading.maxTemperature()),
+					reading.status().isOutOfRange() ? " (fora da faixa)" : ""));
+			text.add("Sem leituras por " + duration(Duration.between(alert.lastReadingAt(), alert.endedAt())));
+			text.add("Retorno: " + this.timeFormat.format(alert.endedAt()));
+		}
+		return text.toString();
+	}
+
 	private static String equipment(ExcursionAlert alert) {
-		var line = "%s (%s)".formatted(alert.equipmentName(), alert.equipmentCode());
-		return StringUtils.hasText(alert.equipmentLocation()) ? line + " · " + alert.equipmentLocation() : line;
+		return equipment(alert.equipmentName(), alert.equipmentCode(), alert.equipmentLocation());
+	}
+
+	private static String equipment(String name, String code, String location) {
+		var line = "%s (%s)".formatted(name, code);
+		return StringUtils.hasText(location) ? line + " · " + location : line;
 	}
 
 	private static String range(ExcursionAlert alert) {
-		return "%s a %s".formatted(number(alert.minTemperature()), celsius(alert.maxTemperature()));
+		return range(alert.minTemperature(), alert.maxTemperature());
+	}
+
+	private static String range(BigDecimal min, BigDecimal max) {
+		return "%s a %s".formatted(number(min), celsius(max));
 	}
 
 	private static String celsius(BigDecimal value) {

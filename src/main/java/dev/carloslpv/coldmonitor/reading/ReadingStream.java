@@ -21,8 +21,9 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter.SseEventBuilder;
 
 /**
- * Pushes every committed reading to the connected Server-Sent Events clients. Sends happen on a single background
- * thread so a slow client never delays ingestion and events reach each client in commit order.
+ * Pushes every committed reading, and other live events such as sensor outages, to the connected Server-Sent Events
+ * clients. Sends happen on a single background thread so a slow client never delays ingestion and events reach each
+ * client in commit order.
  */
 @Component
 public class ReadingStream {
@@ -57,10 +58,12 @@ public class ReadingStream {
 	@TransactionalEventListener
 	void onReadingRecorded(ReadingRecordedEvent event) {
 		var reading = event.reading();
-		broadcast(() -> SseEmitter.event()
-			.name("reading")
-			.id(reading.id().toString())
-			.data(reading, MediaType.APPLICATION_JSON));
+		publish("reading", reading.id().toString(), reading);
+	}
+
+	/** Sends a named event with a JSON payload to every connected client. */
+	public void publish(String name, String id, Object data) {
+		broadcast(() -> SseEmitter.event().name(name).id(id).data(data, MediaType.APPLICATION_JSON));
 	}
 
 	/** Keeps idle connections open through proxies and lets the server notice clients that went away. */

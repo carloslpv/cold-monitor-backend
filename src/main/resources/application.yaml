@@ -23,6 +23,8 @@ cold-monitor:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
   alerts:
     recovery-readings: ${ALERT_RECOVERY_READINGS:2}
+    offline-after: ${ALERT_OFFLINE_AFTER:5m}
+    offline-check-interval: ${ALERT_OFFLINE_CHECK_INTERVAL:15s}
     time-zone: ${ALERT_TIME_ZONE:America/Sao_Paulo}
     telegram:
       bot-token: ${TELEGRAM_BOT_TOKEN:}
