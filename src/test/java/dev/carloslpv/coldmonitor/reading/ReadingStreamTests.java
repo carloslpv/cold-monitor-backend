@@ -67,6 +67,25 @@ class ReadingStreamTests {
 	}
 
 	@Test
+	void streamsEquipmentChanges() throws Exception {
+		var before = stream.subscriberCount();
+
+		HttpResponse<Stream<String>> response = http
+			.sendAsync(HttpRequest.newBuilder(uri("/api/v1/readings/stream")).GET().build(), BodyHandlers.ofLines())
+			.get(10, TimeUnit.SECONDS);
+		try (var lines = response.body()) {
+			await().atMost(Duration.ofSeconds(5)).until(() -> stream.subscriberCount() > before);
+
+			var equipmentId = registerFridge("STREAM-EQ-01");
+
+			var event = nextEvent(lines.iterator(), "equipment");
+			assertThat(JsonPath.<String>read(event, "$.id")).isEqualTo(equipmentId);
+			assertThat(JsonPath.<String>read(event, "$.code")).isEqualTo("STREAM-EQ-01");
+			assertThat(JsonPath.<Boolean>read(event, "$.active")).isTrue();
+		}
+	}
+
+	@Test
 	void allowsTheDashboardOrigin() throws Exception {
 		var preflight = http.send(HttpRequest.newBuilder(uri("/api/v1/equipment"))
 			.method("OPTIONS", HttpRequest.BodyPublishers.noBody())
@@ -91,17 +110,22 @@ class ReadingStreamTests {
 
 	/** Reads lines until the next {@code reading} event and returns its JSON payload. */
 	private static String nextReading(Iterator<String> lines) {
-		var inReading = false;
+		return nextEvent(lines, "reading");
+	}
+
+	/** Reads lines until the next event with the given name and returns its JSON payload. */
+	private static String nextEvent(Iterator<String> lines, String name) {
+		var inEvent = false;
 		while (lines.hasNext()) {
 			var line = lines.next();
-			if (line.equals("event:reading")) {
-				inReading = true;
+			if (line.startsWith("event:")) {
+				inEvent = line.equals("event:" + name);
 			}
-			else if (inReading && line.startsWith("data:")) {
+			else if (inEvent && line.startsWith("data:")) {
 				return line.substring("data:".length());
 			}
 		}
-		throw new AssertionError("Stream ended before a reading event arrived");
+		throw new AssertionError("Stream ended before a " + name + " event arrived");
 	}
 
 	private String registerFridge(String code) throws Exception {

@@ -6,6 +6,7 @@ import java.util.UUID;
 import dev.carloslpv.coldmonitor.common.ConflictException;
 import dev.carloslpv.coldmonitor.common.NotFoundException;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -14,8 +15,11 @@ public class EquipmentService {
 
 	private final EquipmentRepository repository;
 
-	public EquipmentService(EquipmentRepository repository) {
+	private final ApplicationEventPublisher events;
+
+	public EquipmentService(EquipmentRepository repository, ApplicationEventPublisher events) {
 		this.repository = repository;
+		this.events = events;
 	}
 
 	@Transactional
@@ -23,8 +27,10 @@ public class EquipmentService {
 		if (repository.existsByCode(request.code())) {
 			throw duplicateCode(request.code());
 		}
-		return repository.save(new Equipment(request.code(), request.name(), request.location(), request.type(),
-				request.minTemperature(), request.maxTemperature(), request.activeOrDefault()));
+		var equipment = repository.save(new Equipment(request.code(), request.name(), request.location(),
+				request.type(), request.minTemperature(), request.maxTemperature(), request.activeOrDefault()));
+		events.publishEvent(new EquipmentChangedEvent(EquipmentResponse.from(equipment)));
+		return equipment;
 	}
 
 	@Transactional
@@ -35,7 +41,9 @@ public class EquipmentService {
 		}
 		equipment.update(request.code(), request.name(), request.location(), request.type(),
 				request.minTemperature(), request.maxTemperature(), request.activeOrDefault());
-		return repository.saveAndFlush(equipment);
+		equipment = repository.saveAndFlush(equipment);
+		events.publishEvent(new EquipmentChangedEvent(EquipmentResponse.from(equipment)));
+		return equipment;
 	}
 
 	@Transactional(readOnly = true)
