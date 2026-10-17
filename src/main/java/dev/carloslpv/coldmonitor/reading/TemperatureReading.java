@@ -1,7 +1,9 @@
 package dev.carloslpv.coldmonitor.reading;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
 import dev.carloslpv.coldmonitor.equipment.Equipment;
@@ -57,12 +59,13 @@ public class TemperatureReading {
 
 	public TemperatureReading(Equipment equipment, BigDecimal temperature, Instant recordedAt, Instant receivedAt) {
 		this.equipment = equipment;
-		this.temperature = temperature;
-		this.recordedAt = recordedAt;
-		this.receivedAt = receivedAt;
+		// match the column precision so the response equals what is read back later
+		this.temperature = temperature.setScale(2, RoundingMode.HALF_UP);
+		this.recordedAt = recordedAt.truncatedTo(ChronoUnit.MICROS);
+		this.receivedAt = receivedAt.truncatedTo(ChronoUnit.MICROS);
 		this.minTemperature = equipment.getMinTemperature();
 		this.maxTemperature = equipment.getMaxTemperature();
-		this.status = ReadingStatus.classify(temperature, this.minTemperature, this.maxTemperature);
+		this.status = ReadingStatus.classify(this.temperature, this.minTemperature, this.maxTemperature);
 	}
 
 	public UUID getId() {
