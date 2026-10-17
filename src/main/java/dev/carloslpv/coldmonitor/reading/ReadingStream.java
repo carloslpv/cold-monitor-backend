@@ -55,6 +55,10 @@ public class ReadingStream {
 		return emitter;
 	}
 
+	int clientCount() {
+		return emitters.size();
+	}
+
 	@TransactionalEventListener
 	void onReadingRecorded(ReadingRecordedEvent event) {
 		var reading = event.reading();

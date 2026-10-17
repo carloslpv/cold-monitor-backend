@@ -8,6 +8,7 @@ import dev.carloslpv.coldmonitor.TestcontainersConfiguration;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.micrometer.metrics.test.autoconfigure.AutoConfigureMetrics;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -17,6 +18,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
+@AutoConfigureMetrics
 @Import(TestcontainersConfiguration.class)
 class LoginTests {
 
@@ -43,6 +45,12 @@ class LoginTests {
 		var logout = session.post("/api/v1/auth/logout", "");
 		assertThat(logout.statusCode()).isEqualTo(204);
 		assertThat(session.get("/api/v1/auth/me").statusCode()).isEqualTo(401);
+	}
+
+	@Test
+	void keepsMetricsBehindTheAdminLoginOnTheMainPort() throws Exception {
+		assertThat(ApiSession.anonymous(port).get("/actuator/prometheus").statusCode()).isEqualTo(401);
+		assertThat(ApiSession.admin(port).get("/actuator/prometheus").statusCode()).isEqualTo(200);
 	}
 
 	@Test

@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.config.Customizer;
@@ -18,6 +19,7 @@ import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.authentication.logout.HttpStatusReturningLogoutSuccessHandler;
+import org.springframework.security.web.util.matcher.RequestMatcher;
 
 /**
  * Who may call what:
@@ -29,6 +31,10 @@ import org.springframework.security.web.authentication.logout.HttpStatusReturnin
  * <li>Sensors send the device API key in {@code X-API-Key} and may only list and register equipment and post
  * readings.</li>
  * <li>The health endpoint stays public for container health checks.</li>
+ * <li>Every actuator endpoint, metrics included, is open on the separate management port when one is set
+ * ({@code MANAGEMENT_SERVER_PORT}, as the Docker image does). That port is never published or proxied, so only services
+ * on the internal network, such as Prometheus, reach it. On the main port the other endpoints need the
+ * administrator.</li>
  * </ul>
  */
 @Configuration(proxyBeanMethods = false)
@@ -43,12 +49,13 @@ class SecurityConfiguration {
 
 	@Bean
 	SecurityFilterChain securityFilterChain(HttpSecurity http, SecurityProperties properties, ProblemWriter problems,
-			AuthResponses responses) {
+			AuthResponses responses, Environment environment) {
 		if (!properties.deviceAccessEnabled()) {
 			logger.warn("DEVICE_API_KEY is not set: sensors cannot send readings until it is");
 		}
 		var apiKeyFilter = new ApiKeyAuthenticationFilter(properties, problems);
 		http.authorizeHttpRequests((requests) -> requests
+			.requestMatchers(onManagementPort(environment)).permitAll()
 			.requestMatchers("/actuator/health", "/actuator/health/**", "/error").permitAll()
 			.requestMatchers(HttpMethod.POST, "/api/v1/auth/login").permitAll()
 			.requestMatchers(HttpMethod.GET, "/api/v1/equipment", "/api/v1/equipment/*")
@@ -78,6 +85,18 @@ class SecurityConfiguration {
 				.accessDeniedHandler((request, response, ex) -> problems.write(response, HttpStatus.FORBIDDEN,
 						"Access denied")));
 		return http.build();
+	}
+
+	/** Requests that reached the separate management server, when it runs. */
+	private static RequestMatcher onManagementPort(Environment environment) {
+		return (request) -> {
+			// set once the servers have started; without a port of its own, the management port is an alias of the
+			// main one
+			var managementPort = environment.getProperty("local.management.port", Integer.class);
+			var serverPort = environment.getProperty("local.server.port", Integer.class);
+			return managementPort != null && !managementPort.equals(serverPort)
+					&& request.getLocalPort() == managementPort;
+		};
 	}
 
 	@Bean

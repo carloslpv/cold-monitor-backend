@@ -1,10 +1,13 @@
 package dev.carloslpv.coldmonitor.alert;
 
 import java.time.Duration;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -19,6 +22,9 @@ import org.springframework.web.client.RestClientException;
  * Sends excursion and sensor outage alerts once the change that caused them is committed. Every alert is logged; it
  * also goes to Telegram when a bot token and chat id are configured. Deliveries run one at a time on a background
  * thread, so ingestion never waits on Telegram and an alert's end never arrives before its start.
+ * <p>
+ * Counts every alert raised ({@code coldmonitor.alerts}) and every Telegram delivery that succeeded or was given up
+ * ({@code coldmonitor.alert.deliveries}).
  */
 @Component
 class AlertNotifier {
@@ -35,11 +41,20 @@ class AlertNotifier {
 
 	private final TelegramClient telegram;
 
+	private final MeterRegistry registry;
+
+	private final Counter delivered;
+
+	private final Counter failed;
+
 	private final ExecutorService sender = Executors
 		.newSingleThreadExecutor(Thread.ofVirtual().name("telegram-sender").factory());
 
-	AlertNotifier(AlertProperties properties) {
+	AlertNotifier(AlertProperties properties, MeterRegistry registry) {
 		this.messages = new AlertMessages(properties.timeZone());
+		this.registry = registry;
+		this.delivered = deliveries(registry, "sent");
+		this.failed = deliveries(registry, "failed");
 		if (properties.telegram().isConfigured()) {
 			this.telegram = new TelegramClient(properties.telegram());
 			logger.info("Telegram alerts on, sending to chat {}", properties.telegram().chatId());
@@ -52,12 +67,29 @@ class AlertNotifier {
 
 	@TransactionalEventListener
 	void onExcursion(ExcursionAlert alert) {
+		count("excursion", alert.kind());
 		send("Excursion " + alert.kind(), alert.equipmentCode(), this.messages.format(alert));
 	}
 
 	@TransactionalEventListener
 	void onSensorOutage(SensorOutageAlert alert) {
+		count("sensor_outage", alert.kind());
 		send("Sensor outage " + alert.kind(), alert.equipmentCode(), this.messages.format(alert));
+	}
+
+	private void count(String type, Enum<?> kind) {
+		Counter.builder("coldmonitor.alerts")
+			.description("Alerts raised, whether or not a channel delivered them")
+			.tags("type", type, "kind", kind.name().toLowerCase(Locale.ROOT))
+			.register(this.registry)
+			.increment();
+	}
+
+	private static Counter deliveries(MeterRegistry registry, String outcome) {
+		return Counter.builder("coldmonitor.alert.deliveries")
+			.description("Alert deliveries to Telegram that succeeded or were given up")
+			.tags("channel", "telegram", "outcome", outcome)
+			.register(registry);
 	}
 
 	private void send(String alert, String equipmentCode, String text) {
@@ -72,6 +104,7 @@ class AlertNotifier {
 			Duration delay;
 			try {
 				this.telegram.sendMessage(text);
+				this.delivered.increment();
 				return;
 			}
 			catch (HttpClientErrorException.TooManyRequests ex) {
@@ -81,6 +114,7 @@ class AlertNotifier {
 				// a wrong token or chat id: retrying cannot help
 				logger.error("Telegram rejected the {} alert for {}: {} {}", alert, equipmentCode, ex.getStatusCode(),
 						ex.getResponseBodyAsString());
+				this.failed.increment();
 				return;
 			}
 			catch (RestClientException ex) {
@@ -95,6 +129,7 @@ class AlertNotifier {
 				}
 			}
 			if (attempt >= MAX_ATTEMPTS) {
+				this.failed.increment();
 				return;
 			}
 			try {
@@ -102,6 +137,7 @@ class AlertNotifier {
 			}
 			catch (InterruptedException ex) {
 				Thread.currentThread().interrupt();
+				this.failed.increment();
 				return;
 			}
 		}

@@ -48,7 +48,16 @@ cold-monitor:
       chat-id: ${TELEGRAM_CHAT_ID:}
 
 management:
+  # the Docker image moves the actuator to its own port (MANAGEMENT_SERVER_PORT=8081), which is only reachable inside
+  # the container network; see SecurityConfiguration
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,prometheus
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      # lets Prometheus compute latency percentiles across instances and time ranges
+      percentiles-histogram:
+        http.server.requests: true

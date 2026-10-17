@@ -22,6 +22,8 @@ public interface SensorOutageRepository extends JpaRepository<SensorOutage, UUID
 	@EntityGraph(attributePaths = "equipment")
 	List<SensorOutage> findByEquipmentIdOrderByDetectedAtAsc(UUID equipmentId);
 
+	long countByEndedAtIsNull();
+
 	@Query("select o.equipment.id from SensorOutage o where o.endedAt is null")
 	List<UUID> findOpenEquipmentIds();
 

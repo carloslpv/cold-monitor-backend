@@ -21,7 +21,9 @@ COPY --from=build /workspace/extracted/spring-boot-loader/ ./
 COPY --from=build /workspace/extracted/snapshot-dependencies/ ./
 COPY --from=build /workspace/extracted/application/ ./
 USER app
-EXPOSE 8080
+# the actuator (health and Prometheus metrics) gets a port of its own that is never published or proxied
+ENV MANAGEMENT_SERVER_PORT=8081
+EXPOSE 8080 8081
 HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=5 \
-	CMD curl -fsS http://localhost:8080/actuator/health || exit 1
+	CMD curl -fsS "http://localhost:${MANAGEMENT_SERVER_PORT}/actuator/health" || exit 1
 ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "app.jar"]

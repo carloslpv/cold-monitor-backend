@@ -12,4 +12,6 @@ public interface ExcursionRepository extends JpaRepository<Excursion, UUID> {
 
 	List<Excursion> findByEquipmentIdOrderByStartedAtAsc(UUID equipmentId);
 
+	long countByEndedAtIsNull();
+
 }
