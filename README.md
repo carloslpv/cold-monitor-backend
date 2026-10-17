@@ -11,11 +11,12 @@ send temperature readings to this API; each reading is stored and checked agains
 registered for its equipment. Readings outside that range are flagged, every reading is pushed live to the
 [dashboard](https://github.com/carloslpv/cold-monitor-dashboard) over Server-Sent Events, and a Telegram alert goes out
 when an equipment leaves its range, when its sensor stops sending readings, and again when either situation is over.
+The API is protected: people log in with a user name and password, and sensors send a device API key.
 
 ### Stack
 
 - Java 25
-- Spring Boot 4.1 (Web MVC, Data JPA, Validation, Actuator)
+- Spring Boot 4.1 (Web MVC, Data JPA, Validation, Actuator, Security, Session JDBC)
 - PostgreSQL 18 with Flyway migrations
 - Maven (wrapper included)
 - Testcontainers for integration tests
@@ -23,6 +24,9 @@ when an equipment leaves its range, when its sensor stops sending readings, and 
 ### Running locally
 
 Requirements: JDK 25 and Docker.
+
+Set `ADMIN_PASSWORD` and `DEVICE_API_KEY` first (in the environment or in `.env`, see [Configuration](#configuration));
+the app does not start without an administrator password.
 
 ```bash
 docker compose up -d
@@ -38,6 +42,9 @@ To run the app with a throwaway database managed by Testcontainers instead of Do
 ./mvnw spring-boot:test-run
 ```
 
+`test-run` uses the test credentials from `src/test/resources/config/application.yaml`: user `admin`, password
+`test-admin-password` and device key `test-device-api-key-0123456789`.
+
 ### Docker
 
 The `Dockerfile` builds the app with the Maven wrapper and runs it on a JRE as a non-root user, with a health check on
@@ -45,7 +52,7 @@ The `Dockerfile` builds the app with the Maven wrapper and runs it on a JRE as a
 
 ```bash
 docker build -t cold-monitor-backend .
-docker run -p 8080:8080 -e DB_HOST=host.docker.internal cold-monitor-backend
+docker run -p 8080:8080 -e DB_HOST=host.docker.internal -e ADMIN_PASSWORD=... -e DEVICE_API_KEY=... cold-monitor-backend
 ```
 
 To run the whole system (database, backend, dashboard) around the clock, use the compose file in
@@ -61,7 +68,11 @@ To run the whole system (database, backend, dashboard) around the clock, use the
 | `DB_USER` | `coldmonitor` | Database user |
 | `DB_PASSWORD` | `coldmonitor` | Database password |
 | `SERVER_PORT` | `8080` | HTTP port |
-| `CORS_ALLOWED_ORIGINS` | `http://localhost:5173` | Comma-separated browser origins allowed to call `/api/**` (the dashboard dev server by default) |
+| `ADMIN_USERNAME` | `admin` | User name of the administrator who logs in to the dashboard |
+| `ADMIN_PASSWORD` | (required) | Administrator password, at least 8 characters. The app does not start without it |
+| `DEVICE_API_KEY` | (empty) | Key sensors send in `X-API-Key`, at least 16 characters (e.g. `openssl rand -hex 32`). Sensors cannot send readings while it is empty |
+| `SESSION_TIMEOUT` | `12h` | How long a login lasts without requests (an open dashboard keeps it alive) |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:5173` | Comma-separated browser origins allowed to call `/api/**` with the session cookie (the dashboard dev server by default) |
 | `TELEGRAM_BOT_TOKEN` | (empty) | Bot token from @BotFather. Alerts are only logged while this or the chat id is empty |
 | `TELEGRAM_CHAT_ID` | (empty) | Chat that receives the alerts |
 | `ALERT_RECOVERY_READINGS` | `2` | Consecutive in-range readings needed before an excursion counts as over |
@@ -71,6 +82,35 @@ To run the whole system (database, backend, dashboard) around the clock, use the
 
 Variables can also go in a `.env` file at the project root (one `KEY=value` per line), which the app reads on startup.
 The file is git-ignored; keep secrets such as the bot token there or in the environment, never in `application.yaml`.
+
+### Authentication
+
+Everything under `/api/v1` needs authentication except the login itself; `/actuator/health` stays public for health
+checks.
+
+- **People (dashboard)**: there is one administrator, `ADMIN_USERNAME` / `ADMIN_PASSWORD`; changing the password in the
+  environment and restarting changes it. `POST /api/v1/auth/login` with the form fields `username` and `password` starts
+  a session and sets an HTTP-only cookie, which also authorizes the live stream. `GET /api/v1/auth/me` returns the
+  logged-in user (or 401) and `POST /api/v1/auth/logout` ends the session. Sessions are stored in PostgreSQL (Spring
+  Session JDBC), so restarting the backend does not log anyone out.
+- **CSRF**: requests that change data with the session cookie must echo the value of the `XSRF-TOKEN` cookie in the
+  `X-XSRF-TOKEN` header. The dashboard does this on its own.
+- **Sensors**: send `X-API-Key: <DEVICE_API_KEY>`. A device may list and fetch equipment, register equipment and post
+  readings (`GET /equipment`, `GET /equipment/{id}`, `POST /equipment`, `POST /equipment/{id}/readings`); anything
+  else answers 403. Devices get no session and no CSRF check.
+- Failures are problem details: 401 with `Authentication required`, `Invalid username or password` or
+  `Invalid API key`, and 403 with `Access denied`.
+
+```bash
+# a sensor sending a reading
+curl -H "X-API-Key: $DEVICE_API_KEY" -H 'Content-Type: application/json' \
+  -d '{"temperature": 4.2}' http://localhost:8080/api/v1/equipment/<id>/readings
+
+# logging in from the command line: the first request hands out the XSRF-TOKEN cookie
+curl -s -c cookies.txt http://localhost:8080/api/v1/auth/me > /dev/null
+curl -b cookies.txt -c cookies.txt -H "X-XSRF-TOKEN: $(awk '$6 == "XSRF-TOKEN" {print $7}' cookies.txt)" \
+  -d username=admin --data-urlencode "password=$ADMIN_PASSWORD" http://localhost:8080/api/v1/auth/login
+```
 
 ### API
 
@@ -171,7 +211,7 @@ with the shape of the `/equipment` endpoints, goes out whenever equipment is reg
 `active` flag), so clients can refresh their equipment list.
 
 ```bash
-curl -N http://localhost:8080/api/v1/readings/stream
+curl -N -b cookies.txt http://localhost:8080/api/v1/readings/stream   # after logging in as shown above
 ```
 
 ### Out-of-range alerts
@@ -264,7 +304,8 @@ src/main/java/dev/carloslpv/coldmonitor
 ├── common      error handling, paging, clock, CORS
 ├── equipment   equipment registration and thresholds
 ├── reading     reading ingestion, history, out-of-range detection and live stream
-└── alert       excursion and sensor outage tracking, Telegram alerts
+├── alert       excursion and sensor outage tracking, Telegram alerts
+└── security    login, sessions, CSRF and the device API key
 src/main/resources/db/migration   Flyway migrations
 ```
 
@@ -277,12 +318,13 @@ e câmaras frias enviam leituras de temperatura para esta API; cada leitura é g
 e máximo cadastrados para o equipamento. Leituras fora da faixa são sinalizadas, toda leitura é enviada ao vivo para o
 [dashboard](https://github.com/carloslpv/cold-monitor-dashboard) por Server-Sent Events, e um alerta vai para o
 Telegram quando um equipamento sai da faixa, quando o sensor dele para de enviar leituras, e de novo quando cada
-situação termina.
+situação termina. A API é protegida: pessoas entram com usuário e senha, e os sensores enviam uma chave de API de
+dispositivo.
 
 ### Tecnologias
 
 - Java 25
-- Spring Boot 4.1 (Web MVC, Data JPA, Validation, Actuator)
+- Spring Boot 4.1 (Web MVC, Data JPA, Validation, Actuator, Security, Session JDBC)
 - PostgreSQL 18 com migrações Flyway
 - Maven (wrapper incluído)
 - Testcontainers nos testes de integração
@@ -290,6 +332,9 @@ situação termina.
 ### Como rodar localmente
 
 Requisitos: JDK 25 e Docker.
+
+Antes, defina `ADMIN_PASSWORD` e `DEVICE_API_KEY` (no ambiente ou no `.env`, veja [Configuração](#configuração)); a
+aplicação não sobe sem a senha do administrador.
 
 ```bash
 docker compose up -d
@@ -305,6 +350,9 @@ Para rodar a aplicação com um banco descartável gerenciado pelo Testcontainer
 ./mvnw spring-boot:test-run
 ```
 
+O `test-run` usa as credenciais de teste de `src/test/resources/config/application.yaml`: usuário `admin`, senha
+`test-admin-password` e chave de dispositivo `test-device-api-key-0123456789`.
+
 ### Docker
 
 O `Dockerfile` compila a aplicação com o Maven wrapper e roda num JRE com usuário sem privilégios, com health check em
@@ -312,7 +360,7 @@ O `Dockerfile` compila a aplicação com o Maven wrapper e roda num JRE com usu�
 
 ```bash
 docker build -t cold-monitor-backend .
-docker run -p 8080:8080 -e DB_HOST=host.docker.internal cold-monitor-backend
+docker run -p 8080:8080 -e DB_HOST=host.docker.internal -e ADMIN_PASSWORD=... -e DEVICE_API_KEY=... cold-monitor-backend
 ```
 
 Para rodar o sistema inteiro (banco, backend e dashboard) 24 horas por dia, use o compose do
@@ -328,7 +376,11 @@ Para rodar o sistema inteiro (banco, backend e dashboard) 24 horas por dia, use 
 | `DB_USER` | `coldmonitor` | Usuário do banco |
 | `DB_PASSWORD` | `coldmonitor` | Senha do banco |
 | `SERVER_PORT` | `8080` | Porta HTTP |
-| `CORS_ALLOWED_ORIGINS` | `http://localhost:5173` | Origens de navegador, separadas por vírgula, que podem chamar `/api/**` (por padrão, o servidor de desenvolvimento do dashboard) |
+| `ADMIN_USERNAME` | `admin` | Usuário do administrador que entra no dashboard |
+| `ADMIN_PASSWORD` | (obrigatória) | Senha do administrador, com pelo menos 8 caracteres. A aplicação não sobe sem ela |
+| `DEVICE_API_KEY` | (vazio) | Chave que os sensores enviam em `X-API-Key`, com pelo menos 16 caracteres (por exemplo, `openssl rand -hex 32`). Enquanto estiver vazia, os sensores não conseguem enviar leituras |
+| `SESSION_TIMEOUT` | `12h` | Quanto tempo um login dura sem requisições (um dashboard aberto mantém a sessão viva) |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:5173` | Origens de navegador, separadas por vírgula, que podem chamar `/api/**` com o cookie de sessão (por padrão, o servidor de desenvolvimento do dashboard) |
 | `TELEGRAM_BOT_TOKEN` | (vazio) | Token do bot criado no @BotFather. Enquanto ele ou o chat id estiver vazio, os alertas só vão para o log |
 | `TELEGRAM_CHAT_ID` | (vazio) | Chat que recebe os alertas |
 | `ALERT_RECOVERY_READINGS` | `2` | Leituras seguidas dentro da faixa para considerar a excursão encerrada |
@@ -339,6 +391,26 @@ Para rodar o sistema inteiro (banco, backend e dashboard) 24 horas por dia, use 
 As variáveis também podem ficar num arquivo `.env` na raiz do projeto (uma `CHAVE=valor` por linha), que a aplicação
 lê ao subir. O arquivo está no `.gitignore`; guarde segredos como o token do bot nele ou no ambiente, nunca no
 `application.yaml`.
+
+### Autenticação
+
+Tudo em `/api/v1` exige autenticação, menos o próprio login; o `/actuator/health` continua público para os health
+checks.
+
+- **Pessoas (dashboard)**: existe um administrador, `ADMIN_USERNAME` / `ADMIN_PASSWORD`; para trocar a senha, mude a
+  variável e reinicie. `POST /api/v1/auth/login` com os campos de formulário `username` e `password` abre uma sessão e
+  grava um cookie HTTP-only, que também autoriza o fluxo ao vivo. `GET /api/v1/auth/me` devolve o usuário logado (ou
+  401) e `POST /api/v1/auth/logout` encerra a sessão. As sessões ficam no PostgreSQL (Spring Session JDBC), então
+  reiniciar o backend não desloga ninguém.
+- **CSRF**: requisições que alteram dados com o cookie de sessão precisam repetir o valor do cookie `XSRF-TOKEN` no
+  cabeçalho `X-XSRF-TOKEN`. O dashboard faz isso sozinho.
+- **Sensores**: enviam `X-API-Key: <DEVICE_API_KEY>`. Um dispositivo pode listar e buscar equipamentos, cadastrar
+  equipamentos e enviar leituras (`GET /equipment`, `GET /equipment/{id}`, `POST /equipment`,
+  `POST /equipment/{id}/readings`); o resto responde 403. Dispositivos não têm sessão nem verificação de CSRF.
+- As falhas vêm como problem details: 401 com `Authentication required`, `Invalid username or password` ou
+  `Invalid API key`, e 403 com `Access denied`.
+
+Os exemplos com `curl` (sensor enviando leitura e login pela linha de comando) estão na seção em inglês.
 
 ### API
 
@@ -428,7 +500,7 @@ formato dos endpoints `/equipment`, sai sempre que um equipamento é cadastrado 
 para os clientes atualizarem a lista de equipamentos.
 
 ```bash
-curl -N http://localhost:8080/api/v1/readings/stream
+curl -N -b cookies.txt http://localhost:8080/api/v1/readings/stream   # depois do login, como na seção em inglês
 ```
 
 ### Alertas de fora da faixa
@@ -524,6 +596,7 @@ src/main/java/dev/carloslpv/coldmonitor
 ├── common      tratamento de erros, paginação, relógio, CORS
 ├── equipment   cadastro de equipamentos e limites
 ├── reading     recebimento de leituras, histórico, detecção de fora da faixa e fluxo ao vivo
-└── alert       acompanhamento de excursões e de sensores sem leituras, alertas no Telegram
+├── alert       acompanhamento de excursões e de sensores sem leituras, alertas no Telegram
+└── security    login, sessões, CSRF e chave de API dos dispositivos
 src/main/resources/db/migration   migrações Flyway
 ```
