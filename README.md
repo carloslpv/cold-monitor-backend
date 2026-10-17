@@ -8,8 +8,9 @@
 
 Backend for **cold-monitor**, a cold-chain temperature monitoring system. Sensors in fridges, freezers and cold rooms
 send temperature readings to this API; each reading is stored and checked against the minimum and maximum thresholds
-registered for its equipment. Readings outside that range are flagged and published as events, and every reading is
-pushed live to the [dashboard](https://github.com/carloslpv/cold-monitor-dashboard) over Server-Sent Events.
+registered for its equipment. Readings outside that range are flagged, every reading is pushed live to the
+[dashboard](https://github.com/carloslpv/cold-monitor-dashboard) over Server-Sent Events, and a Telegram alert goes out
+when an equipment leaves its range and again when it comes back.
 
 ### Stack
 
@@ -48,6 +49,13 @@ To run the app with a throwaway database managed by Testcontainers instead of Do
 | `DB_PASSWORD` | `coldmonitor` | Database password |
 | `SERVER_PORT` | `8080` | HTTP port |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173` | Comma-separated browser origins allowed to call `/api/**` (the dashboard dev server by default) |
+| `TELEGRAM_BOT_TOKEN` | (empty) | Bot token from @BotFather. Alerts are only logged while this or the chat id is empty |
+| `TELEGRAM_CHAT_ID` | (empty) | Chat that receives the alerts |
+| `ALERT_RECOVERY_READINGS` | `2` | Consecutive in-range readings needed before an excursion counts as over |
+| `ALERT_TIME_ZONE` | `America/Sao_Paulo` | Time zone of the times written in alert messages |
+
+Variables can also go in a `.env` file at the project root (one `KEY=value` per line), which the app reads on startup.
+The file is git-ignored; keep secrets such as the bot token there or in the environment, never in `application.yaml`.
 
 ### API
 
@@ -124,10 +132,45 @@ REST endpoints after reconnecting.
 curl -N http://localhost:8080/api/v1/readings/stream
 ```
 
-### Out-of-range detection
+### Out-of-range alerts
 
-When a reading is out of range, the service publishes an `OutOfRangeReadingEvent` (Spring application event). For now
-a listener logs a warning after the transaction commits; alert channels will subscribe to the same event.
+Alerts work per **excursion**, a continuous stretch of out-of-range readings on one equipment, not per reading:
+
+- The first out-of-range reading opens an excursion and sends an "above the maximum" (or "below the minimum") alert
+  with the reading, the allowed range and the start time.
+- Further out-of-range readings send nothing; the excursion keeps track of the lowest and highest temperature.
+- Once `ALERT_RECOVERY_READINGS` consecutive readings are back in range (2 by default, so a value hovering at the limit
+  does not flap), the excursion closes and a "back in range" alert goes out with the current reading, the peak
+  temperature and how long it lasted. The end time is the first of those in-range readings.
+- Readings older than the latest one stored for that equipment (a sensor flushing its buffer) are stored but do not
+  open or close excursions.
+
+Excursions are stored in the `excursion` table, so an excursion that is open when the app restarts is still closed and
+announced correctly afterwards. Alerts are sent in order on a background thread after the reading's transaction
+commits; Telegram failures are logged and retried up to 3 times, honouring Telegram's `retry_after` on HTTP 429. Every
+alert is also logged at `WARN`, and each out-of-range reading still publishes an `OutOfRangeReadingEvent` (logged at
+`INFO`). Messages are written in Brazilian Portuguese:
+
+```
+🔴 Temperatura acima do máximo
+Vaccine fridge (SIM-FRIDGE-01) · Pharmacy
+Leitura: 9,3 °C · faixa: 2,0 a 8,0 °C
+Início: 17/10/2026 02:00:00
+```
+
+#### Setting up the Telegram bot
+
+1. In Telegram, talk to [@BotFather](https://t.me/BotFather), send `/newbot` and pick a name and a username ending in
+   `bot`. BotFather replies with the bot token.
+2. Open a chat with the new bot and send `/start` (a bot cannot message you first). To alert a group instead, add the
+   bot to the group and send a message there.
+3. Open `https://api.telegram.org/bot<TOKEN>/getUpdates` in a browser and copy `message.chat.id` (group ids are
+   negative).
+4. Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`, in the environment or in `.env`, and restart the app. The log says
+   `Telegram alerts on` at startup.
+
+The Telegram Bot API is free. Tests and `spring-boot:test-run` never send real alerts: they blank both settings in
+`src/test/resources/config/application.yaml`, and the alert tests use a fake Telegram server.
 
 ### Tests
 
@@ -143,7 +186,8 @@ Integration tests start PostgreSQL through Testcontainers, so Docker must be run
 src/main/java/dev/carloslpv/coldmonitor
 ├── common      error handling, paging, clock, CORS
 ├── equipment   equipment registration and thresholds
-└── reading     reading ingestion, history, out-of-range detection and live stream
+├── reading     reading ingestion, history, out-of-range detection and live stream
+└── alert       excursion tracking and Telegram alerts
 src/main/resources/db/migration   Flyway migrations
 ```
 
@@ -153,8 +197,9 @@ src/main/resources/db/migration   Flyway migrations
 
 Backend do **cold-monitor**, um sistema de monitoramento de temperatura da cadeia fria. Sensores em geladeiras, freezers
 e câmaras frias enviam leituras de temperatura para esta API; cada leitura é gravada e comparada com os limites mínimo
-e máximo cadastrados para o equipamento. Leituras fora da faixa são sinalizadas e publicadas como eventos, e toda leitura é
-enviada ao vivo para o [dashboard](https://github.com/carloslpv/cold-monitor-dashboard) por Server-Sent Events.
+e máximo cadastrados para o equipamento. Leituras fora da faixa são sinalizadas, toda leitura é enviada ao vivo para o
+[dashboard](https://github.com/carloslpv/cold-monitor-dashboard) por Server-Sent Events, e um alerta vai para o
+Telegram quando um equipamento sai da faixa e de novo quando ele volta.
 
 ### Tecnologias
 
@@ -193,6 +238,14 @@ Para rodar a aplicação com um banco descartável gerenciado pelo Testcontainer
 | `DB_PASSWORD` | `coldmonitor` | Senha do banco |
 | `SERVER_PORT` | `8080` | Porta HTTP |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173` | Origens de navegador, separadas por vírgula, que podem chamar `/api/**` (por padrão, o servidor de desenvolvimento do dashboard) |
+| `TELEGRAM_BOT_TOKEN` | (vazio) | Token do bot criado no @BotFather. Enquanto ele ou o chat id estiver vazio, os alertas só vão para o log |
+| `TELEGRAM_CHAT_ID` | (vazio) | Chat que recebe os alertas |
+| `ALERT_RECOVERY_READINGS` | `2` | Leituras seguidas dentro da faixa para considerar a excursão encerrada |
+| `ALERT_TIME_ZONE` | `America/Sao_Paulo` | Fuso horário dos horários escritos nos alertas |
+
+As variáveis também podem ficar num arquivo `.env` na raiz do projeto (uma `CHAVE=valor` por linha), que a aplicação
+lê ao subir. O arquivo está no `.gitignore`; guarde segredos como o token do bot nele ou no ambiente, nunca no
+`application.yaml`.
 
 ### API
 
@@ -270,11 +323,47 @@ recarrega o histórico pelos endpoints REST depois de reconectar.
 curl -N http://localhost:8080/api/v1/readings/stream
 ```
 
-### Detecção de fora da faixa
+### Alertas de fora da faixa
 
-Quando uma leitura está fora da faixa, o serviço publica um `OutOfRangeReadingEvent` (evento de aplicação do Spring).
-Por enquanto um listener registra um aviso no log depois do commit da transação; os canais de alerta vão assinar o mesmo
-evento.
+Os alertas são por **excursão**, um trecho contínuo de leituras fora da faixa num equipamento, e não por leitura:
+
+- A primeira leitura fora da faixa abre uma excursão e envia um alerta de "acima do máximo" (ou "abaixo do mínimo") com
+  a leitura, a faixa permitida e o horário de início.
+- As leituras fora da faixa seguintes não enviam nada; a excursão guarda a menor e a maior temperatura.
+- Quando `ALERT_RECOVERY_READINGS` leituras seguidas voltam para a faixa (2 por padrão, para um valor oscilando no
+  limite não ficar abrindo e fechando), a excursão é encerrada e vai um alerta de "de volta à faixa" com a leitura atual,
+  a temperatura de pico e a duração. O horário de fim é o da primeira dessas leituras dentro da faixa.
+- Leituras mais antigas que a última gravada para o equipamento (um sensor esvaziando o buffer) são gravadas, mas não
+  abrem nem encerram excursões.
+
+As excursões ficam na tabela `excursion`, então uma excursão aberta quando a aplicação reinicia continua sendo encerrada
+e avisada corretamente depois. Os alertas saem em ordem, numa thread em segundo plano, depois do commit da transação da
+leitura; falhas no Telegram vão para o log e são tentadas de novo até 3 vezes, respeitando o `retry_after` do Telegram
+em respostas HTTP 429. Todo alerta também é registrado no log em `WARN`, e cada leitura fora da faixa continua
+publicando um `OutOfRangeReadingEvent` (registrado em `INFO`). As mensagens são em português:
+
+```
+✅ Temperatura de volta à faixa
+Vaccine fridge (SIM-FRIDGE-01) · Pharmacy
+Leitura: 5,5 °C · faixa: 2,0 a 8,0 °C
+Máxima: 10,1 °C · duração: 4 min
+Fim: 17/10/2026 02:04:00
+```
+
+#### Como configurar o bot do Telegram
+
+1. No Telegram, converse com o [@BotFather](https://t.me/BotFather), mande `/newbot` e escolha um nome e um usuário
+   terminado em `bot`. O BotFather responde com o token do bot.
+2. Abra uma conversa com o bot novo e mande `/start` (um bot não consegue puxar conversa primeiro). Para alertar um
+   grupo, adicione o bot ao grupo e mande uma mensagem lá.
+3. Abra `https://api.telegram.org/bot<TOKEN>/getUpdates` no navegador e copie o `message.chat.id` (ids de grupo são
+   negativos).
+4. Defina `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID`, no ambiente ou no `.env`, e reinicie a aplicação. O log mostra
+   `Telegram alerts on` ao subir.
+
+A Bot API do Telegram é gratuita. Os testes e o `spring-boot:test-run` nunca enviam alertas de verdade: eles zeram as
+duas configurações em `src/test/resources/config/application.yaml`, e os testes de alerta usam um servidor falso do
+Telegram.
 
 ### Testes
 
@@ -290,6 +379,7 @@ Os testes de integração sobem o PostgreSQL pelo Testcontainers, então o Docke
 src/main/java/dev/carloslpv/coldmonitor
 ├── common      tratamento de erros, paginação, relógio, CORS
 ├── equipment   cadastro de equipamentos e limites
-└── reading     recebimento de leituras, histórico, detecção de fora da faixa e fluxo ao vivo
+├── reading     recebimento de leituras, histórico, detecção de fora da faixa e fluxo ao vivo
+└── alert       acompanhamento de excursões e alertas no Telegram
 src/main/resources/db/migration   migrações Flyway
 ```
