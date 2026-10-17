@@ -348,6 +348,12 @@ src/main/java/dev/carloslpv/coldmonitor
 src/main/resources/db/migration   Flyway migrations
 ```
 
+### License
+
+[PolyForm Noncommercial 1.0.0](LICENSE.md): you may read, run and modify this code for personal, study, research and
+other noncommercial purposes. Commercial use needs written permission from the author; get in touch through
+[GitHub](https://github.com/carloslpv).
+
 ---
 
 ## Português (Brasil)
@@ -683,3 +689,9 @@ src/main/java/dev/carloslpv/coldmonitor
 └── security    login, sessões, CSRF e chave de API dos dispositivos
 src/main/resources/db/migration   migrações Flyway
 ```
+
+### Licença
+
+[PolyForm Noncommercial 1.0.0](LICENSE.md): você pode ler, rodar e modificar este código para uso pessoal, estudo,
+pesquisa e outros fins não comerciais. Uso comercial precisa de autorização por escrito do autor; entre em contato
+pelo [GitHub](https://github.com/carloslpv).
