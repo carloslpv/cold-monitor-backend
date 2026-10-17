@@ -38,6 +38,19 @@ To run the app with a throwaway database managed by Testcontainers instead of Do
 ./mvnw spring-boot:test-run
 ```
 
+### Docker
+
+The `Dockerfile` builds the app with the Maven wrapper and runs it on a JRE as a non-root user, with a health check on
+`/actuator/health`:
+
+```bash
+docker build -t cold-monitor-backend .
+docker run -p 8080:8080 -e DB_HOST=host.docker.internal cold-monitor-backend
+```
+
+To run the whole system (database, backend, dashboard) around the clock, use the compose file in
+[cold-monitor-infra](https://github.com/carloslpv/cold-monitor-infra).
+
 ### Configuration
 
 | Variable | Default | Description |
@@ -239,7 +252,8 @@ The Telegram Bot API is free. Tests and `spring-boot:test-run` never send real a
 ./mvnw test
 ```
 
-Integration tests start PostgreSQL through Testcontainers, so Docker must be running.
+Integration tests start PostgreSQL through Testcontainers, so Docker must be running. GitHub Actions
+(`.github/workflows/ci.yml`) runs them and builds the Docker image on every push and pull request.
 
 ### Project layout
 
@@ -288,6 +302,19 @@ Para rodar a aplicação com um banco descartável gerenciado pelo Testcontainer
 ```bash
 ./mvnw spring-boot:test-run
 ```
+
+### Docker
+
+O `Dockerfile` compila a aplicação com o Maven wrapper e roda num JRE com usuário sem privilégios, com health check em
+`/actuator/health`:
+
+```bash
+docker build -t cold-monitor-backend .
+docker run -p 8080:8080 -e DB_HOST=host.docker.internal cold-monitor-backend
+```
+
+Para rodar o sistema inteiro (banco, backend e dashboard) 24 horas por dia, use o compose do
+[cold-monitor-infra](https://github.com/carloslpv/cold-monitor-infra).
 
 ### Configuração
 
@@ -483,7 +510,8 @@ Telegram.
 ./mvnw test
 ```
 
-Os testes de integração sobem o PostgreSQL pelo Testcontainers, então o Docker precisa estar rodando.
+Os testes de integração sobem o PostgreSQL pelo Testcontainers, então o Docker precisa estar rodando. O GitHub
+Actions (`.github/workflows/ci.yml`) roda os testes e gera a imagem Docker a cada push e pull request.
 
 ### Estrutura do projeto
 
