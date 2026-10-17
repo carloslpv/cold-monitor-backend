@@ -10,7 +10,7 @@ Backend for **cold-monitor**, a cold-chain temperature monitoring system. Sensor
 send temperature readings to this API; each reading is stored and checked against the minimum and maximum thresholds
 registered for its equipment. Readings outside that range are flagged, every reading is pushed live to the
 [dashboard](https://github.com/carloslpv/cold-monitor-dashboard) over Server-Sent Events, and a Telegram alert goes out
-when an equipment leaves its range and again when it comes back.
+when an equipment leaves its range, when its sensor stops sending readings, and again when either situation is over.
 
 ### Stack
 
@@ -52,6 +52,8 @@ To run the app with a throwaway database managed by Testcontainers instead of Do
 | `TELEGRAM_BOT_TOKEN` | (empty) | Bot token from @BotFather. Alerts are only logged while this or the chat id is empty |
 | `TELEGRAM_CHAT_ID` | (empty) | Chat that receives the alerts |
 | `ALERT_RECOVERY_READINGS` | `2` | Consecutive in-range readings needed before an excursion counts as over |
+| `ALERT_OFFLINE_AFTER` | `5m` | Time without readings before an equipment counts as offline (`30s`, `5m`, `1h`, …) |
+| `ALERT_OFFLINE_CHECK_INTERVAL` | `15s` | How often equipment is checked for missing readings |
 | `ALERT_TIME_ZONE` | `America/Sao_Paulo` | Time zone of the times written in alert messages |
 
 Variables can also go in a `.env` file at the project root (one `KEY=value` per line), which the app reads on startup.
@@ -112,6 +114,28 @@ Each reading is returned with a `status`:
 The thresholds in force when the reading arrived are stored with it, so changing an equipment's limits later does not
 rewrite the history.
 
+#### Sensor outages
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/sensor-outages?open=true` | Equipment currently offline (no readings for `ALERT_OFFLINE_AFTER`) |
+| `GET` | `/sensor-outages?from=&to=` | Outages detected in the window (last 24 hours by default), newest first |
+
+```json
+{
+  "id": "1426e142-…",
+  "equipmentId": "f4dbf3b8-…",
+  "equipmentCode": "SIM-FRIDGE-01",
+  "lastReadingAt": "2026-10-17T05:18:21Z",
+  "lastTemperature": 5.03,
+  "detectedAt": "2026-10-17T05:18:52Z",
+  "endedAt": null,
+  "endTemperature": null
+}
+```
+
+`lastReadingAt` and `endedAt` are arrival times on the server clock; `endedAt` stays `null` while the sensor is silent.
+
 ### Live stream
 
 `GET /api/v1/readings/stream` is a `text/event-stream` that sends a `reading` event for every reading stored after the
@@ -127,6 +151,9 @@ Events are sent after the reading's transaction commits. A `keep-alive` comment 
 server closes each stream after 30 minutes; browsers' `EventSource` reconnects on its own (the stream asks for a
 3-second retry). Readings stored while a client is disconnected are not replayed, so clients reload history from the
 REST endpoints after reconnecting.
+
+The same stream sends a `sensor-outage` event when an equipment goes offline and again when its readings resume. Its
+`data` has the shape of the `/sensor-outages` endpoint (`endedAt` is `null` in the first one).
 
 ```bash
 curl -N http://localhost:8080/api/v1/readings/stream
@@ -158,6 +185,40 @@ Leitura: 9,3 °C · faixa: 2,0 a 8,0 °C
 Início: 17/10/2026 02:00:00
 ```
 
+### Offline sensor alerts
+
+A sensor that stops sending readings (power cut, network down, dead battery) would otherwise go unnoticed, so the
+backend also watches for silence:
+
+- Every `ALERT_OFFLINE_CHECK_INTERVAL` (15 s), each active equipment whose last reading arrived more than
+  `ALERT_OFFLINE_AFTER` ago (5 min) gets an open **sensor outage** and a "sensor without readings" alert with the last
+  reading and how long it has been silent. If the equipment was in an excursion when it went silent, the alert says so,
+  since nobody can tell whether the temperature recovered.
+- The next reading from that equipment closes the outage and sends a "sensor is back" alert with the new reading and
+  how long the gap lasted. It goes out before any excursion alert about that same reading.
+- Equipment that never sent a reading and inactive equipment are not checked. Silence is measured with the server's
+  arrival times, so a sensor with a wrong clock is still judged correctly.
+- Right after the backend starts, silence counts from the startup time, so a backend restart (when no reading could
+  arrive) does not flag every sensor.
+
+Outages are stored in the `sensor_outage` table, so one still open across a restart is not announced twice. Messages:
+
+```
+⚠️ Sensor sem leituras
+Vaccine fridge (SIM-FRIDGE-01) · Pharmacy
+Última leitura: 5,03 °C em 17/10/2026 02:18:21
+Sem leituras há 31 s
+Atenção: estava acima do máximo desde 17/10/2026 02:15:00 · máxima: 9,8 °C
+```
+
+```
+🟢 Sensor voltou a enviar leituras
+Vaccine fridge (SIM-FRIDGE-01) · Pharmacy
+Leitura: 4,34 °C · faixa: 2,0 a 8,0 °C
+Sem leituras por 46 s
+Retorno: 17/10/2026 02:19:07
+```
+
 #### Setting up the Telegram bot
 
 1. In Telegram, talk to [@BotFather](https://t.me/BotFather), send `/newbot` and pick a name and a username ending in
@@ -187,7 +248,7 @@ src/main/java/dev/carloslpv/coldmonitor
 ├── common      error handling, paging, clock, CORS
 ├── equipment   equipment registration and thresholds
 ├── reading     reading ingestion, history, out-of-range detection and live stream
-└── alert       excursion tracking and Telegram alerts
+└── alert       excursion and sensor outage tracking, Telegram alerts
 src/main/resources/db/migration   Flyway migrations
 ```
 
@@ -199,7 +260,8 @@ Backend do **cold-monitor**, um sistema de monitoramento de temperatura da cadei
 e câmaras frias enviam leituras de temperatura para esta API; cada leitura é gravada e comparada com os limites mínimo
 e máximo cadastrados para o equipamento. Leituras fora da faixa são sinalizadas, toda leitura é enviada ao vivo para o
 [dashboard](https://github.com/carloslpv/cold-monitor-dashboard) por Server-Sent Events, e um alerta vai para o
-Telegram quando um equipamento sai da faixa e de novo quando ele volta.
+Telegram quando um equipamento sai da faixa, quando o sensor dele para de enviar leituras, e de novo quando cada
+situação termina.
 
 ### Tecnologias
 
@@ -241,6 +303,8 @@ Para rodar a aplicação com um banco descartável gerenciado pelo Testcontainer
 | `TELEGRAM_BOT_TOKEN` | (vazio) | Token do bot criado no @BotFather. Enquanto ele ou o chat id estiver vazio, os alertas só vão para o log |
 | `TELEGRAM_CHAT_ID` | (vazio) | Chat que recebe os alertas |
 | `ALERT_RECOVERY_READINGS` | `2` | Leituras seguidas dentro da faixa para considerar a excursão encerrada |
+| `ALERT_OFFLINE_AFTER` | `5m` | Tempo sem leituras para considerar o equipamento offline (`30s`, `5m`, `1h`, …) |
+| `ALERT_OFFLINE_CHECK_INTERVAL` | `15s` | De quanto em quanto tempo os equipamentos são verificados |
 | `ALERT_TIME_ZONE` | `America/Sao_Paulo` | Fuso horário dos horários escritos nos alertas |
 
 As variáveis também podem ficar num arquivo `.env` na raiz do projeto (uma `CHAVE=valor` por linha), que a aplicação
@@ -302,6 +366,16 @@ Cada leitura volta com um `status`:
 Os limites vigentes no momento da leitura ficam gravados junto com ela, então mudar os limites de um equipamento depois
 não reescreve o histórico.
 
+#### Sensores sem leituras
+
+| Método | Caminho | Descrição |
+| --- | --- | --- |
+| `GET` | `/sensor-outages?open=true` | Equipamentos offline agora (sem leituras há `ALERT_OFFLINE_AFTER`) |
+| `GET` | `/sensor-outages?from=&to=` | Períodos sem leituras detectados na janela (por padrão, últimas 24 horas), do mais recente para o mais antigo |
+
+`lastReadingAt` e `endedAt` são horários de chegada no relógio do servidor; `endedAt` fica `null` enquanto o sensor
+continua sem enviar leituras. O formato do JSON está na seção em inglês.
+
 ### Fluxo ao vivo
 
 `GET /api/v1/readings/stream` é um `text/event-stream` que envia um evento `reading` para cada leitura gravada depois
@@ -318,6 +392,9 @@ Os eventos saem depois do commit da transação da leitura. Um comentário `keep
 servidor encerra cada conexão após 30 minutos; o `EventSource` do navegador reconecta sozinho (o fluxo pede 3 segundos
 entre tentativas). Leituras gravadas enquanto o cliente estava desconectado não são reenviadas, então o cliente
 recarrega o histórico pelos endpoints REST depois de reconectar.
+
+O mesmo fluxo envia um evento `sensor-outage` quando um equipamento fica offline e de novo quando as leituras voltam. O
+`data` tem o formato do endpoint `/sensor-outages` (`endedAt` vem `null` no primeiro).
 
 ```bash
 curl -N http://localhost:8080/api/v1/readings/stream
@@ -350,6 +427,41 @@ Máxima: 10,1 °C · duração: 4 min
 Fim: 17/10/2026 02:04:00
 ```
 
+### Alertas de sensor sem leituras
+
+Um sensor que para de enviar leituras (queda de energia, rede fora, bateria acabando) passaria despercebido, então o
+backend também vigia o silêncio:
+
+- A cada `ALERT_OFFLINE_CHECK_INTERVAL` (15 s), todo equipamento ativo cuja última leitura chegou há mais de
+  `ALERT_OFFLINE_AFTER` (5 min) ganha um **período sem leituras** aberto e um alerta de "sensor sem leituras" com a
+  última leitura e há quanto tempo ele está em silêncio. Se o equipamento estava em excursão quando parou, o alerta
+  avisa, porque ninguém sabe se a temperatura voltou.
+- A próxima leitura do equipamento encerra o período e envia um alerta de "sensor voltou" com a leitura nova e quanto
+  tempo durou a falha. Ele sai antes de qualquer alerta de excursão sobre essa mesma leitura.
+- Equipamentos que nunca enviaram leitura e equipamentos inativos não são verificados. O silêncio é medido pelo horário
+  de chegada no servidor, então um sensor com relógio errado continua sendo avaliado corretamente.
+- Logo depois que o backend sobe, o silêncio conta a partir da subida, então reiniciar o backend (quando nenhuma
+  leitura consegue chegar) não marca todos os sensores como offline.
+
+Os períodos ficam na tabela `sensor_outage`, então um período aberto durante um reinício não é avisado duas vezes.
+Mensagens:
+
+```
+⚠️ Sensor sem leituras
+Vaccine fridge (SIM-FRIDGE-01) · Pharmacy
+Última leitura: 5,03 °C em 17/10/2026 02:18:21
+Sem leituras há 31 s
+Atenção: estava acima do máximo desde 17/10/2026 02:15:00 · máxima: 9,8 °C
+```
+
+```
+🟢 Sensor voltou a enviar leituras
+Vaccine fridge (SIM-FRIDGE-01) · Pharmacy
+Leitura: 4,34 °C · faixa: 2,0 a 8,0 °C
+Sem leituras por 46 s
+Retorno: 17/10/2026 02:19:07
+```
+
 #### Como configurar o bot do Telegram
 
 1. No Telegram, converse com o [@BotFather](https://t.me/BotFather), mande `/newbot` e escolha um nome e um usuário
@@ -380,6 +492,6 @@ src/main/java/dev/carloslpv/coldmonitor
 ├── common      tratamento de erros, paginação, relógio, CORS
 ├── equipment   cadastro de equipamentos e limites
 ├── reading     recebimento de leituras, histórico, detecção de fora da faixa e fluxo ao vivo
-└── alert       acompanhamento de excursões e alertas no Telegram
+└── alert       acompanhamento de excursões e de sensores sem leituras, alertas no Telegram
 src/main/resources/db/migration   migrações Flyway
 ```
