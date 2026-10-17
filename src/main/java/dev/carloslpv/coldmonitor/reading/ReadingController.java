@@ -9,6 +9,7 @@ import jakarta.validation.Valid;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -17,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 @RestController
 @RequestMapping("/api/v1")
@@ -24,8 +26,11 @@ public class ReadingController {
 
 	private final ReadingService service;
 
-	public ReadingController(ReadingService service) {
+	private final ReadingStream stream;
+
+	public ReadingController(ReadingService service, ReadingStream stream) {
 		this.service = service;
+		this.stream = stream;
 	}
 
 	@PostMapping("/equipment/{equipmentId}/readings")
@@ -53,6 +58,14 @@ public class ReadingController {
 			@PageableDefault(size = 100) Pageable pageable) {
 		var page = service.outOfRange(equipmentId, service.window(from, to), pageable);
 		return PageResponse.from(page.map(ReadingResponse::from));
+	}
+
+	/**
+	 * Server-Sent Events stream with a {@code reading} event for every reading stored from now on.
+	 */
+	@GetMapping(path = "/readings/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+	public SseEmitter stream() {
+		return stream.subscribe();
 	}
 
 }

@@ -50,6 +50,7 @@ public class ReadingService {
 			throw new BadRequestException("recordedAt %s is in the future".formatted(recordedAt));
 		}
 		var reading = repository.save(new TemperatureReading(equipment, request.temperature(), recordedAt, now));
+		events.publishEvent(ReadingRecordedEvent.from(reading));
 		if (reading.getStatus().isOutOfRange()) {
 			events.publishEvent(OutOfRangeReadingEvent.from(reading));
 		}

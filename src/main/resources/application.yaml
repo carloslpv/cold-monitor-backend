@@ -15,6 +15,10 @@ spring:
 server:
   port: ${SERVER_PORT:8080}
 
+cold-monitor:
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
+
 management:
   endpoints:
     web:
