@@ -1,6 +1,11 @@
 # Overrides for tests and spring-boot:test-run. Keeps them from sending real Telegram alerts with the token in .env
-# or in the environment; tests that need Telegram point it at a fake server.
+# or in the environment; tests that need Telegram point it at a fake server. Also fixes the credentials, so the tests
+# and test-run never depend on the real ones.
 cold-monitor:
+  security:
+    admin-username: admin
+    admin-password: test-admin-password
+    device-api-key: test-device-api-key-0123456789
   alerts:
     telegram:
       bot-token: ""

@@ -14,11 +14,25 @@ spring:
       ddl-auto: validate
   flyway:
     locations: classpath:db/migration
+  session:
+    # the session tables are created by Flyway (V5)
+    jdbc:
+      initialize-schema: never
 
 server:
   port: ${SERVER_PORT:8080}
+  servlet:
+    session:
+      # an open dashboard keeps its session alive through the live stream, which reconnects every 30 minutes
+      timeout: ${SESSION_TIMEOUT:12h}
+      cookie:
+        same-site: lax
 
 cold-monitor:
+  security:
+    admin-username: ${ADMIN_USERNAME:admin}
+    admin-password: ${ADMIN_PASSWORD:}
+    device-api-key: ${DEVICE_API_KEY:}
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
   alerts:

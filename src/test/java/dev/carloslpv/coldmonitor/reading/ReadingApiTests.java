@@ -6,6 +6,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
 import com.jayway.jsonpath.JsonPath;
+import dev.carloslpv.coldmonitor.AdminMockMvcConfiguration;
 import dev.carloslpv.coldmonitor.TestcontainersConfiguration;
 import org.junit.jupiter.api.Test;
 
@@ -30,7 +31,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc
 @RecordApplicationEvents
-@Import(TestcontainersConfiguration.class)
+@Import({ TestcontainersConfiguration.class, AdminMockMvcConfiguration.class })
 class ReadingApiTests {
 
 	@Autowired

@@ -30,7 +30,9 @@ class WebConfiguration implements WebMvcConfigurer {
 			.allowedOrigins(cors.allowedOrigins().toArray(String[]::new))
 			.allowedMethods("GET", "POST", "PUT")
 			.allowedHeaders("*")
-			.exposedHeaders("Location");
+			.exposedHeaders("Location")
+			// the dashboard dev server sends its session cookie cross-origin
+			.allowCredentials(true);
 	}
 
 	@ConfigurationProperties("cold-monitor.cors")

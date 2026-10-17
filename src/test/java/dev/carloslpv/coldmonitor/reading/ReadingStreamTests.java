@@ -12,7 +12,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 import com.jayway.jsonpath.JsonPath;
+import dev.carloslpv.coldmonitor.ApiSession;
 import dev.carloslpv.coldmonitor.TestcontainersConfiguration;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -38,14 +40,19 @@ class ReadingStreamTests {
 	@Autowired
 	private ReadingStream stream;
 
+	private ApiSession admin;
+
+	@BeforeEach
+	void logIn() throws Exception {
+		this.admin = ApiSession.admin(this.port);
+	}
+
 	@Test
 	void streamsEveryStoredReadingToSubscribers() throws Exception {
 		var equipmentId = registerFridge("STREAM-01");
 		var before = stream.subscriberCount();
 
-		HttpResponse<Stream<String>> response = http
-			.sendAsync(HttpRequest.newBuilder(uri("/api/v1/readings/stream")).GET().build(), BodyHandlers.ofLines())
-			.get(10, TimeUnit.SECONDS);
+		HttpResponse<Stream<String>> response = openStream();
 		try (var lines = response.body()) {
 			assertThat(response.statusCode()).isEqualTo(200);
 			assertThat(response.headers().firstValue("Content-Type")).hasValueSatisfying(
@@ -70,9 +77,7 @@ class ReadingStreamTests {
 	void streamsEquipmentChanges() throws Exception {
 		var before = stream.subscriberCount();
 
-		HttpResponse<Stream<String>> response = http
-			.sendAsync(HttpRequest.newBuilder(uri("/api/v1/readings/stream")).GET().build(), BodyHandlers.ofLines())
-			.get(10, TimeUnit.SECONDS);
+		HttpResponse<Stream<String>> response = openStream();
 		try (var lines = response.body()) {
 			await().atMost(Duration.ofSeconds(5)).until(() -> stream.subscriberCount() > before);
 
@@ -108,6 +113,20 @@ class ReadingStreamTests {
 		assertThat(preflight.statusCode()).isEqualTo(403);
 	}
 
+	@Test
+	void refusesTheStreamWithoutLogin() throws Exception {
+		var response = http.send(HttpRequest.newBuilder(uri("/api/v1/readings/stream")).GET().build(),
+				BodyHandlers.ofString());
+
+		assertThat(response.statusCode()).isEqualTo(401);
+	}
+
+	private HttpResponse<Stream<String>> openStream() throws Exception {
+		return admin.client()
+			.sendAsync(HttpRequest.newBuilder(uri("/api/v1/readings/stream")).GET().build(), BodyHandlers.ofLines())
+			.get(10, TimeUnit.SECONDS);
+	}
+
 	/** Reads lines until the next {@code reading} event and returns its JSON payload. */
 	private static String nextReading(Iterator<String> lines) {
 		return nextEvent(lines, "reading");
@@ -136,9 +155,11 @@ class ReadingStreamTests {
 		return JsonPath.read(post("/api/v1/equipment", body), "$.id");
 	}
 
+	/** Posts as a sensor would, with the device API key. */
 	private String post(String path, String json) throws Exception {
 		var response = http.send(HttpRequest.newBuilder(uri(path))
 			.header("Content-Type", "application/json")
+			.header("X-API-Key", ApiSession.DEVICE_API_KEY)
 			.POST(BodyPublishers.ofString(json))
 			.timeout(Duration.ofSeconds(10))
 			.build(), BodyHandlers.ofString());
