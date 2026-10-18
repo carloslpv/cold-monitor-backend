@@ -20,6 +20,7 @@ The architecture diagram, screenshots and an overview of the whole system are in
 
 - Java 25
 - Spring Boot 4.1 (Web MVC, Data JPA, Validation, Actuator, Security, Session JDBC)
+- Micrometer with the Prometheus registry
 - PostgreSQL 18 with Flyway migrations
 - Maven (wrapper included)
 - Testcontainers for integration tests
@@ -51,7 +52,7 @@ To run the app with a throwaway database managed by Testcontainers instead of Do
 ### Docker
 
 The `Dockerfile` builds the app with the Maven wrapper and runs it on a JRE as a non-root user, with a health check on
-`/actuator/health`:
+`/actuator/health`. The Actuator listens on port 8081 in the image (see Metrics):
 
 ```bash
 docker build -t cold-monitor-backend .
@@ -295,6 +296,37 @@ Retorno: 17/10/2026 02:19:07
 The Telegram Bot API is free. Tests and `spring-boot:test-run` never send real alerts: they blank both settings in
 `src/test/resources/config/application.yaml`, and the alert tests use a fake Telegram server.
 
+### Metrics
+
+The Actuator exposes `health`, `info` and `prometheus` (Micrometer's Prometheus registry). The Docker image sets
+`MANAGEMENT_SERVER_PORT=8081`, so the Actuator answers on a port of its own: there every endpoint is open, because that
+port is only reachable inside the Docker network, where Prometheus scrapes it. On the main port, `/actuator/health`
+stays public and the other endpoints need the administrator. Without `MANAGEMENT_SERVER_PORT` (e.g. `spring-boot:run`)
+both share port 8080.
+
+```bash
+curl http://localhost:8081/actuator/prometheus     # inside the container network
+```
+
+Besides the standard JVM, HTTP (with histograms for percentiles), HikariCP and Tomcat metrics, the backend publishes
+its own, all tagged `application="cold-monitor-backend"`:
+
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `coldmonitor_readings_total` | counter | `equipment`, `status` | Readings stored, by result (`IN_RANGE`, `ABOVE_MAX`, `BELOW_MIN`) |
+| `coldmonitor_temperature_celsius` | gauge | `equipment` | Latest temperature of each equipment |
+| `coldmonitor_temperature_limit_celsius` | gauge | `equipment`, `bound` | Its allowed range (`min`, `max`) |
+| `coldmonitor_excursions_open` | gauge | | Equipment out of range right now |
+| `coldmonitor_sensor_outages_open` | gauge | | Equipment whose sensor stopped sending readings |
+| `coldmonitor_alerts_total` | counter | `type`, `kind` | Alerts raised (`excursion` or `sensor_outage`, `started` or `ended`) |
+| `coldmonitor_alert_deliveries_total` | counter | `channel`, `outcome` | Telegram deliveries that were `sent` or `failed` after the retries |
+| `coldmonitor_stream_clients` | gauge | | Clients on the live stream |
+
+Equipment is labelled by code, so each equipment adds a handful of series. The per-equipment gauges appear with its
+first reading after startup; the open counts are read from the database on each scrape, so they are right after a
+restart. [cold-monitor-infra](https://github.com/carloslpv/cold-monitor-infra) runs Prometheus, Loki and Grafana with
+a ready-made dashboard for all of this.
+
 ### Technical decisions
 
 - **Server-Sent Events for the live stream.** Updates only flow from the server to the dashboard, and every change
@@ -324,6 +356,10 @@ The Telegram Bot API is free. Tests and `spring-boot:test-run` never send real a
 - **Telegram off the request path.** `AlertNotifier` sends after the commit on a single background thread, in order,
   retrying network errors and honouring `retry_after` on HTTP 429, and gives up on 4xx errors that retrying cannot
   fix. The token is redacted from logged errors.
+- **Metrics on a port of their own.** Prometheus cannot log in with a form, and an extra token would be one more
+  secret to manage. Moving the Actuator to `MANAGEMENT_SERVER_PORT` keeps metrics out of everything the dashboard
+  proxies, so scraping needs no credentials and nothing about them is reachable from outside. Domain metrics are
+  recorded after the commit, like the live stream, so a rolled-back reading is never counted.
 - **Schema owned by Flyway, tests on real PostgreSQL.** Hibernate only validates the schema (`ddl-auto: validate`) and
   integration tests use Testcontainers, so partial indexes, `TIMESTAMPTZ` and locks behave as in production.
 
@@ -373,6 +409,7 @@ O diagrama de arquitetura, os screenshots e a visão geral do sistema inteiro es
 
 - Java 25
 - Spring Boot 4.1 (Web MVC, Data JPA, Validation, Actuator, Security, Session JDBC)
+- Micrometer com o registry Prometheus
 - PostgreSQL 18 com migrações Flyway
 - Maven (wrapper incluído)
 - Testcontainers nos testes de integração
@@ -404,7 +441,7 @@ O `test-run` usa as credenciais de teste de `src/test/resources/config/applicati
 ### Docker
 
 O `Dockerfile` compila a aplicação com o Maven wrapper e roda num JRE com usuário sem privilégios, com health check em
-`/actuator/health`:
+`/actuator/health`. Na imagem, o Actuator escuta na porta 8081 (veja Métricas):
 
 ```bash
 docker build -t cold-monitor-backend .
@@ -633,6 +670,38 @@ A Bot API do Telegram é gratuita. Os testes e o `spring-boot:test-run` nunca en
 duas configurações em `src/test/resources/config/application.yaml`, e os testes de alerta usam um servidor falso do
 Telegram.
 
+### Métricas
+
+O Actuator expõe `health`, `info` e `prometheus` (o registry Prometheus do Micrometer). A imagem Docker define
+`MANAGEMENT_SERVER_PORT=8081`, então o Actuator responde numa porta própria: nela todo endpoint é aberto, porque essa
+porta só é acessível dentro da rede do Docker, onde o Prometheus faz a coleta. Na porta principal, o
+`/actuator/health` continua público e os outros endpoints exigem o administrador. Sem `MANAGEMENT_SERVER_PORT` (por
+exemplo no `spring-boot:run`) os dois dividem a porta 8080.
+
+```bash
+curl http://localhost:8081/actuator/prometheus     # dentro da rede dos containers
+```
+
+Além das métricas padrão de JVM, HTTP (com histogramas para percentis), HikariCP e Tomcat, o backend publica as suas,
+todas com `application="cold-monitor-backend"`:
+
+| Métrica | Tipo | Labels | Significado |
+| --- | --- | --- | --- |
+| `coldmonitor_readings_total` | counter | `equipment`, `status` | Leituras gravadas, por resultado (`IN_RANGE`, `ABOVE_MAX`, `BELOW_MIN`) |
+| `coldmonitor_temperature_celsius` | gauge | `equipment` | Última temperatura de cada equipamento |
+| `coldmonitor_temperature_limit_celsius` | gauge | `equipment`, `bound` | A faixa permitida (`min`, `max`) |
+| `coldmonitor_excursions_open` | gauge | | Equipamentos fora da faixa agora |
+| `coldmonitor_sensor_outages_open` | gauge | | Equipamentos cujo sensor parou de enviar leituras |
+| `coldmonitor_alerts_total` | counter | `type`, `kind` | Alertas disparados (`excursion` ou `sensor_outage`, `started` ou `ended`) |
+| `coldmonitor_alert_deliveries_total` | counter | `channel`, `outcome` | Entregas ao Telegram `sent` ou `failed` depois das novas tentativas |
+| `coldmonitor_stream_clients` | gauge | | Clientes no fluxo ao vivo |
+
+O equipamento vai no label pelo código, então cada equipamento acrescenta poucas séries. Os gauges por equipamento
+aparecem com a primeira leitura depois da inicialização; as contagens de abertos são lidas do banco a cada coleta,
+então ficam certas logo depois de um reinício. O
+[cold-monitor-infra](https://github.com/carloslpv/cold-monitor-infra) roda Prometheus, Loki e Grafana com um
+dashboard pronto para tudo isso.
+
 ### Decisões técnicas
 
 - **Server-Sent Events para o fluxo ao vivo.** As atualizações só vão do servidor para o dashboard, e toda alteração
@@ -665,6 +734,10 @@ Telegram.
 - **Telegram fora do caminho da requisição.** O `AlertNotifier` envia depois do commit numa única thread em segundo
   plano, em ordem, tentando de novo em erros de rede e respeitando o `retry_after` do HTTP 429, e desiste em erros 4xx
   que uma nova tentativa não resolve. O token é removido dos erros que vão para o log.
+- **Métricas numa porta própria.** O Prometheus não faz login por formulário, e um token a mais seria mais um
+  segredo para cuidar. Levar o Actuator para a `MANAGEMENT_SERVER_PORT` deixa as métricas fora de tudo o que o
+  dashboard repassa, então a coleta não precisa de credenciais e nada delas fica acessível de fora. As métricas do
+  domínio são registradas depois do commit, como o fluxo ao vivo, então uma leitura desfeita nunca é contada.
 - **Schema do Flyway, testes em PostgreSQL de verdade.** O Hibernate só valida o schema (`ddl-auto: validate`) e os
   testes de integração usam o Testcontainers, então índices parciais, `TIMESTAMPTZ` e locks se comportam como em
   produção.
