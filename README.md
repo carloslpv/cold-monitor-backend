@@ -13,6 +13,9 @@ registered for its equipment. Readings outside that range are flagged, every rea
 when an equipment leaves its range, when its sensor stops sending readings, and again when either situation is over.
 The API is protected: people log in with a user name and password, and sensors send a device API key.
 
+Readings come from the [simulator](https://github.com/carloslpv/cold-monitor-simulator) or, on real hardware, from
+the bridge in [cold-monitor-edge](https://github.com/carloslpv/cold-monitor-edge), which takes ESP32 readings from MQTT and posts them here with the device key.
+
 The architecture diagram, screenshots and an overview of the whole system are in
 [cold-monitor-infra](https://github.com/carloslpv/cold-monitor-infra).
 
@@ -401,6 +404,9 @@ e máximo cadastrados para o equipamento. Leituras fora da faixa são sinalizada
 Telegram quando um equipamento sai da faixa, quando o sensor dele para de enviar leituras, e de novo quando cada
 situação termina. A API é protegida: pessoas entram com usuário e senha, e os sensores enviam uma chave de API de
 dispositivo.
+
+As leituras vêm do [simulador](https://github.com/carloslpv/cold-monitor-simulator) ou, com hardware real, da ponte
+do [cold-monitor-edge](https://github.com/carloslpv/cold-monitor-edge), que recebe as leituras do ESP32 por MQTT e as envia para cá com a chave do dispositivo.
 
 O diagrama de arquitetura, os screenshots e a visão geral do sistema inteiro estão no
 [cold-monitor-infra](https://github.com/carloslpv/cold-monitor-infra).
